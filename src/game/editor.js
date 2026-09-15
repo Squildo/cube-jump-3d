@@ -1,13 +1,19 @@
 import * as THREE from 'three';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { World } from './World.js';
 import { updateBox } from './Physics.js';
 
-// Outils : select | platform | platform-move-x | platform-move-z | bouncy | coin | spike | checkpoint | goal | spawn | eraser
+// Outils : select | move | rotate | scale | platform | platform-move-x | platform-move-z | bouncy | coin | spike | checkpoint | goal | spawn | eraser | ice | laser | laser-spin | laser-slide | wind
 const TOOL_SIZES = {
   'platform': [2.6, 0.8, 2.6],
   'platform-move-x': [2.6, 0.8, 2.6],
   'platform-move-z': [2.6, 0.8, 2.6],
   'bouncy': [3, 0.8, 3],
+  'ice': [2.6, 0.8, 2.6],
+  'laser': [0.4, 0.4, 0.4],
+  'laser-spin': [0.4, 0.4, 0.4],
+  'laser-slide': [0.4, 0.4, 0.4],
+  'wind': [4, 2, 4],
 };
 
 export class Editor {
@@ -47,27 +53,77 @@ export class Editor {
     this.ghost.visible = false;
     this.scene.add(this.ghost);
 
+    // Gizmo Roblox Studio : déplacer / pivoter / agrandir avec précision
+    this.transformMode = 'translate'; // translate | rotate | scale
+    this.transformControls = new TransformControls(this.camera, this.canvas);
+    this.transformControls.setMode('translate');
+    this.transformControls.setSize(0.9);
+    this.transformControls.visible = false;
+    this.transformControls.enabled = false;
+    this.transformControls.addEventListener('dragging-changed', e => {
+      this._draggingGizmo = e.value;
+      this._orbiting = false;
+      if (this.canvas) this.canvas.style.cursor = e.value ? 'grabbing' : 'default';
+      if (!e.value && this.selected) {
+        // fin de drag : snap + updateBox
+        if (this.transformMode === 'translate') {
+          this.selected.position.x = this._snapped(this.selected.position.x);
+          this.selected.position.z = this._snapped(this.selected.position.z);
+        }
+        if (this.selected.userData.size) {
+          // met à jour taille depuis scale pour le mode scale
+          if (this.transformMode === 'scale' && this.selected.userData.size) {
+            const s = this.selected.scale;
+            const base = this.selected.userData.size;
+            // TransformControls scale modifie scale, on convertit en size
+            const nx = Math.max(0.5, base.x * s.x);
+            const ny = Math.max(0.2, base.y * s.y);
+            const nz = Math.max(0.5, base.z * s.z);
+            this.selected.scale.set(1,1,1);
+            this.selected.geometry.dispose();
+            this.selected.geometry = new THREE.BoxGeometry(nx, ny, nz);
+            this.selected.userData.size.set(nx, ny, nz);
+          }
+          updateBox(this.selected);
+        }
+        this._emitChange('gizmo');
+        this.onSelect?.(this.selected);
+      }
+    });
+    this.transformControls.addEventListener('change', () => {
+      if (this.selected?.userData.size) updateBox(this.selected);
+    });
+    this.scene.add(this.transformControls);
+
+    this._keys = {};
     this._onMove = this._onMove.bind(this);
     this._onDown = this._onDown.bind(this);
     this._onUp = this._onUp.bind(this);
     this._onWheel = this._onWheel.bind(this);
     this._onKey = this._onKey.bind(this);
+    this._onKeyUp = this._onKeyUp.bind(this);
     this._onCtx = (e) => e.preventDefault();
   }
 
-  get isPlacementTool() { return !['select', 'eraser'].includes(this.tool); }
+  get isPlacementTool() { return !['select', 'eraser', 'move', 'rotate', 'scale'].includes(this.tool); }
 
   enable() {
     if (this.enabled) return;
     this.enabled = true;
     this.grid.visible = true;
+    // rend les zones vent visibles en édition
+    for (const w of this.world.windZones) w.visible = true;
     this.pushUndo(); // état de départ pour Ctrl+Z
     this.canvas.addEventListener('pointermove', this._onMove);
     this.canvas.addEventListener('pointerdown', this._onDown);
     window.addEventListener('pointerup', this._onUp);
     this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
     window.addEventListener('keydown', this._onKey);
+    window.addEventListener('keyup', this._onKeyUp);
     this.canvas.addEventListener('contextmenu', this._onCtx);
+    this.canvas.style.cursor = 'default';
+    const thSel = document.getElementById('editor-theme');
+    if (thSel) thSel.value = this.world.theme || 'forest';
     this._applyCamera();
   }
   disable() {
@@ -75,17 +131,37 @@ export class Editor {
     this.enabled = false;
     this.grid.visible = false;
     this.ghost.visible = false;
+    for (const w of this.world.windZones) w.visible = false;
     this.select(null);
+    this._keys = {};
     this.canvas.removeEventListener('pointermove', this._onMove);
     this.canvas.removeEventListener('pointerdown', this._onDown);
     window.removeEventListener('pointerup', this._onUp);
     this.canvas.removeEventListener('wheel', this._onWheel);
     window.removeEventListener('keydown', this._onKey);
+    window.removeEventListener('keyup', this._onKeyUp);
     this.canvas.removeEventListener('contextmenu', this._onCtx);
+    this.canvas.style.cursor = 'default';
+    if (document.pointerLockElement === this.canvas) try { document.exitPointerLock(); } catch {}
   }
 
   setTool(t) {
     this.tool = t;
+    if (['move', 'rotate', 'scale'].includes(t)) {
+      this.setTransformMode(t);
+      // garde la sélection pour transformer
+      if (this.selected) {
+        this.transformControls.attach(this.selected);
+        this.transformControls.visible = true;
+        this.transformControls.enabled = true;
+      }
+      this.ghost.visible = false;
+      return;
+    }
+    // placement tools : détache gizmo
+    this.transformControls.detach();
+    this.transformControls.visible = false;
+    this.transformControls.enabled = false;
     this.select(null);
     this._updateGhostGeo();
   }
@@ -95,9 +171,12 @@ export class Editor {
     else if (this.tool === 'spike') this.ghost.geometry = new THREE.ConeGeometry(0.45, 1, 4);
     else if (this.tool === 'spawn') this.ghost.geometry = new THREE.SphereGeometry(0.4, 10, 8);
     else if (this.tool === 'checkpoint' || this.tool === 'goal') this.ghost.geometry = new THREE.BoxGeometry(1, 2.4, 1);
+    else if (this.tool === 'ice') { this.ghost.geometry = new THREE.BoxGeometry(2.6, 0.8, 2.6); this.ghost.material.color.setHex(0xbae6fd); }
+    else if (this.tool.startsWith('laser')) { this.ghost.geometry = new THREE.CylinderGeometry(0.05, 0.05, 3, 8); this.ghost.material.color.setHex(0xff4444); }
+    else if (this.tool === 'wind') { this.ghost.geometry = new THREE.BoxGeometry(4, 2, 4); this.ghost.material.color.setHex(0x88ccff); }
     else if (TOOL_SIZES[this.tool]) { const [x, y, z] = TOOL_SIZES[this.tool]; this.ghost.geometry = new THREE.BoxGeometry(x, y, z); }
     else this.ghost.geometry = new THREE.BoxGeometry(2.6, 0.8, 2.6);
-    this.ghost.material.color.setHex(this.tool === 'eraser' ? 0xef4444 : 0x22c55e);
+    if (!this.tool.startsWith('laser') && this.tool !== 'ice' && this.tool !== 'wind') this.ghost.material.color.setHex(this.tool === 'eraser' ? 0xef4444 : 0x22c55e);
     this.ghost.visible = this.enabled && this.isPlacementTool;
   }
 
@@ -136,7 +215,7 @@ export class Editor {
     const w = this.world;
     // exclut les socles auto (checkpoint/goal-base) : on sélectionne le drapeau parent
     const plats = w.platforms.filter(p => !p.userData.editorBase);
-    return [...plats, ...w.coins, ...w.spikes, ...w.checkpoints, ...(w.goal ? [w.goal] : [])];
+    return [...plats, ...w.coins, ...w.spikes, ...w.checkpoints, ...(w.goal ? [w.goal] : []), ...w.lasers, ...w.windZones];
   }
   _castAt(clientX, clientY) {
     const r = this.canvas.getBoundingClientRect();
@@ -178,7 +257,33 @@ export class Editor {
   select(mesh) {
     this.selected = mesh;
     this.world.setSelected(mesh);
+    if (mesh && mesh.userData.editorKind && this.isGizmoTool) {
+      this.transformControls.attach(mesh);
+      this.transformControls.visible = true;
+      this.transformControls.enabled = true;
+    } else {
+      this.transformControls.detach();
+      this.transformControls.visible = false;
+      this.transformControls.enabled = false;
+    }
     this.onSelect?.(mesh);
+  }
+  get isGizmoTool() { return ['select', 'move', 'rotate', 'scale'].includes(this.tool); }
+  setTransformMode(mode) {
+    this.transformMode = mode;
+    const m = mode === 'move' ? 'translate' : mode;
+    this.transformControls.setMode(m);
+    // icônes de précision : snap adapté
+    if (mode === 'rotate') this.transformControls.setRotationSnap(THREE.MathUtils.degToRad(15));
+    else this.transformControls.setRotationSnap(null);
+    if (mode === 'scale') this.transformControls.setScaleSnap(0.25);
+    else this.transformControls.setScaleSnap(null);
+    if (mode === 'move' || mode === 'translate') this.transformControls.setTranslationSnap(this.snap > 0 ? this.snap : null);
+    else this.transformControls.setTranslationSnap(null);
+    if (this.selected) {
+      this.transformControls.visible = true;
+      this.transformControls.enabled = true;
+    }
   }
 
   placeAt(raw) {
@@ -189,6 +294,11 @@ export class Editor {
     else if (this.tool === 'platform-move-x') w.addPlatform(x, y, z, 2.6, 0.8, 2.6, { color: 0xA78BFA, move: 'x', speed: 1.5 });
     else if (this.tool === 'platform-move-z') w.addPlatform(x, y, z, 2.6, 0.8, 2.6, { color: 0xF472B6, move: 'z', speed: 1.5 });
     else if (this.tool === 'bouncy') w.addPlatform(x, y, z, 3, 0.8, 3, { color: 0xFB923C, type: 'bouncy' });
+    else if (this.tool === 'ice') w.addPlatform(x, y, z, 2.6, 0.8, 2.6, { color: 0xe0f2f1, type: 'ice' });
+    else if (this.tool === 'laser') w.addLaser(x, y, z, { mode: 'static', dir: 'x', length: 4 });
+    else if (this.tool === 'laser-spin') w.addLaser(x, y, z, { mode: 'spin', length: 5, speed: 0.9 });
+    else if (this.tool === 'laser-slide') w.addLaser(x, y, z, { mode: 'slide', axis: 'x', length: 4, speed: 1.2, range: 3 });
+    else if (this.tool === 'wind') w.addWindZone(x, y, z, 4, 2, 4, {x:1,z:0}, 1.5);
     else if (this.tool === 'coin') w.addCoin(x, y, z);
     else if (this.tool === 'spike') w.addSpike(x, y, z);
     else if (this.tool === 'checkpoint') {
@@ -245,9 +355,16 @@ export class Editor {
   // ---------- Événements souris ----------
   _onMove(e) {
     if (!this.enabled) return;
+    if (this._draggingGizmo) return;
+    // Roblox Studio : clic droit maintenu = regard bloqué + WASD
     if (this._orbiting) {
-      const dx = e.clientX - this._lastPX, dy = e.clientY - this._lastPY;
-      this._lastPX = e.clientX; this._lastPY = e.clientY;
+      let dx, dy;
+      if (document.pointerLockElement === this.canvas) {
+        dx = e.movementX; dy = e.movementY;
+      } else {
+        dx = e.clientX - this._lastPX; dy = e.clientY - this._lastPY;
+        this._lastPX = e.clientX; this._lastPY = e.clientY;
+      }
       if (this._panning) {
         const s = this.orbit.dist / 600;
         const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0);
@@ -288,10 +405,29 @@ export class Editor {
     if (e.button === 2 || e.button === 1) {
       this._orbiting = true; this._panning = (e.button === 1 || e.shiftKey);
       this._lastPX = e.clientX; this._lastPY = e.clientY;
+      if (e.button === 2) {
+        try { this.canvas.requestPointerLock(); } catch {}
+        this.canvas.style.cursor = 'grabbing';
+      }
       e.preventDefault();
       return;
     }
     if (e.button !== 0) return;
+    // si gizmo en cours, laisse TransformControls gérer
+    if (this._draggingGizmo) return;
+    // outils transform Roblox : move / rotate / scale = sélection + gizmo
+    if (['move', 'rotate', 'scale'].includes(this.tool)) {
+      const hit = this._castAt(e.clientX, e.clientY);
+      if (hit?.object) {
+        this.select(hit.object);
+        // le gizmo prend le relais pour le drag
+      } else {
+        this.select(null);
+        this._orbiting = true; this._panning = false;
+        this._lastPX = e.clientX; this._lastPY = e.clientY;
+      }
+      return;
+    }
     // outil sélection/gomme : clic = pick
     if (this.tool === 'select') {
       const hit = this._castAt(e.clientX, e.clientY);
@@ -323,9 +459,11 @@ export class Editor {
     const pt = this._placementPoint(e.clientX, e.clientY);
     if (pt) this.placeAt(pt);
   }
-  _onUp() {
+  _onUp(e) {
     if (this._dragging) { this._dragging = false; this._emitChange('drag'); this.onSelect?.(this.selected); }
     this._orbiting = false; this._panning = false;
+    if (document.pointerLockElement === this.canvas) try { document.exitPointerLock(); } catch {}
+    this.canvas.style.cursor = 'default';
   }
   _onWheel(e) {
     if (!this.enabled) return;
@@ -340,11 +478,13 @@ export class Editor {
   }
   _onKey(e) {
     if (!this.enabled) return;
+    this._keys[e.code] = true;
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); this.undo(); return; }
     if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyY' || (e.code === 'KeyZ' && e.shiftKey))) { e.preventDefault(); this.redo(); return; }
     if (e.code === 'Delete' || e.code === 'Backspace') { this.deleteSelected(); return; }
-    if (e.code === 'KeyQ') { this.editY = Math.max(-4, this.editY - 0.5); this.onChange?.('edity'); }
-    if (e.code === 'KeyE') { this.editY = Math.min(20, this.editY + 0.5); this.onChange?.('edity'); }
+    // Q/E pour hauteur fantôme seulement si pas en déplacement WASD (évite conflit)
+    if (e.code === 'KeyQ' && !e.ctrlKey) { if (!this._keys['ShiftLeft'] && !this._keys['ShiftRight']) { this.editY = Math.max(-4, this.editY - 0.5); this.onChange?.('edity'); } }
+    if (e.code === 'KeyE' && !e.ctrlKey) { if (!this._keys['ShiftLeft'] && !this._keys['ShiftRight']) { this.editY = Math.min(20, this.editY + 0.5); this.onChange?.('edity'); } }
     if (e.code.startsWith('Arrow') && this.selected) {
       e.preventDefault();
       const s = 1;
@@ -354,6 +494,10 @@ export class Editor {
       if (e.code === 'ArrowDown') this.nudge(0, 0, s);
       if (e.code === 'ArrowUp' && e.shiftKey) this.nudge(0, s, 0);
     }
+  }
+  _onKeyUp(e) {
+    if (!this.enabled) return;
+    this._keys[e.code] = false;
   }
 
   _applyCamera() {
@@ -369,6 +513,20 @@ export class Editor {
 
   update(dt) {
     if (!this.enabled) return;
+    // Déplacement caméra style Roblox Studio : WASD + Shift (rapide) + Space/Ctrl + Q/E
+    const k = this._keys;
+    const speed = (k['ShiftLeft'] || k['ShiftRight'] ? 18 : 8) * dt;
+    const fwd = new THREE.Vector3(); this.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    let moved = false;
+    if (k['KeyW'] || k['ArrowUp']) { this.orbit.target.addScaledVector(fwd, speed); moved = true; }
+    if (k['KeyS'] || k['ArrowDown']) { this.orbit.target.addScaledVector(fwd, -speed); moved = true; }
+    if (k['KeyA'] || k['ArrowLeft']) { this.orbit.target.addScaledVector(right, -speed); moved = true; }
+    if (k['KeyD'] || k['ArrowRight']) { this.orbit.target.addScaledVector(right, speed); moved = true; }
+    if (k['Space'] || k['KeyE']) { this.orbit.target.addScaledVector(up, speed); moved = true; }
+    if (k['ControlLeft'] || k['ControlRight'] || k['KeyQ'] || k['KeyC']) { this.orbit.target.addScaledVector(up, -speed); moved = true; }
+    if (moved) this._applyCamera();
     if (this.ghost.visible && this.tool === 'coin') this.ghost.rotation.y += dt * 3;
   }
 }

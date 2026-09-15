@@ -30,6 +30,7 @@ export class Player {
     this.speed = 8; this.jumpForce = 9.2;
     this.grounded = false; this.groundPlatform = null;
     this.jumps = 0; this.coyote = 0; this.jumpBuffer = 0;
+    this.doubleDelay = 2.0; this.doubleCooldown = 0; this.doubleReady = true;
     this.didBounce = false;
     this.spawn = new THREE.Vector3(0, 3, 0);
     this.faceAngle = 0;
@@ -41,9 +42,10 @@ export class Player {
   reset(spawn) {
     this.spawn.copy(spawn);
     this.position.copy(spawn);
-    this.vel.set(0, 0, 0); this.jumps = 0;
+    this.vel.set(0, 0, 0); this.jumps = 0; this.doubleCooldown = 0; this.doubleReady = true;
   }
-  update(dt, move, wantJump, audio, flyUp = false, flyDown = false) {
+  getStaminaRatio() { return this.doubleReady ? 1 : Math.max(0, 1 - this.doubleCooldown / this.doubleDelay); }
+  update(dt, move, wantJump, jumpHeld, audio, flyUp = false, flyDown = false) {
     // plateforme mobile : être emporté
     if (this.groundPlatform?.userData.delta) {
       this.position.x += this.groundPlatform.userData.delta.x;
@@ -52,8 +54,9 @@ export class Player {
     }
     // ---- MODE VOL ----
     if (this.fly) {
-      this.vel.x = THREE.MathUtils.damp(this.vel.x, move.x * (this.speed + 4), 8, dt);
-      this.vel.z = THREE.MathUtils.damp(this.vel.z, move.z * (this.speed + 4), 8, dt);
+      // en vol, la vitesse horizontale utilise flySpeed (curseur Vol), pas la vitesse perso
+      this.vel.x = THREE.MathUtils.damp(this.vel.x, move.x * this.flySpeed, 8, dt);
+      this.vel.z = THREE.MathUtils.damp(this.vel.z, move.z * this.flySpeed, 8, dt);
       const targetY = (flyUp ? this.flySpeed : 0) + (flyDown ? -this.flySpeed : 0);
       this.vel.y = THREE.MathUtils.damp(this.vel.y, targetY, 8, dt);
       this.position.x += this.vel.x * dt;
@@ -64,25 +67,38 @@ export class Player {
       this._animate(dt);
       return;
     }
+    const isIce = !!this.groundPlatform?.userData?.ice;
     const accel = this.grounded ? 40 : 18;
     this.vel.x += (move.x * this.speed - this.vel.x) * Math.min(1, accel * dt / this.speed * 8);
     this.vel.z += (move.z * this.speed - this.vel.z) * Math.min(1, accel * dt / this.speed * 8);
-    // version simple + stable :
-    this.vel.x = THREE.MathUtils.damp(this.vel.x, move.x * this.speed, this.grounded ? 12 : 4, dt);
-    this.vel.z = THREE.MathUtils.damp(this.vel.z, move.z * this.speed, this.grounded ? 12 : 4, dt);
+    // version simple + stable : glace = moins de friction
+    const groundDamp = isIce ? 1.2 : 12;
+    this.vel.x = THREE.MathUtils.damp(this.vel.x, move.x * this.speed, this.grounded ? groundDamp : 4, dt);
+    this.vel.z = THREE.MathUtils.damp(this.vel.z, move.z * this.speed, this.grounded ? groundDamp : 4, dt);
+    if (isIce && this.grounded) {
+      // glissade continue
+      this.vel.x *= 0.995; this.vel.z *= 0.995;
+    }
 
     this.vel.y -= 24 * dt; // gravité
     if (this.vel.y < -22) this.vel.y = -22;
 
     if (this.grounded) { this.jumps = 0; this.coyote = 0.12; } else this.coyote -= dt;
     if (wantJump) this.jumpBuffer = 0.12; else this.jumpBuffer -= dt;
+    // stamina double-saut
+    if (this.doubleCooldown > 0) { this.doubleCooldown -= dt; if (this.doubleCooldown <= 0) { this.doubleCooldown = 0; this.doubleReady = true; } }
 
-    if (this.jumpBuffer > 0 && (this.grounded || this.coyote > 0 || this.jumps < 1)) {
-      // saut (double-saut autorisé : 2 sauts)
-      const isDouble = !this.grounded && this.jumps >= 1;
+    // Geometry Dash: maintien de Space/A = saut auto à l'atterrissage (infini), double-saut reste sur edge uniquement + stamina
+    const canGroundJump = this.grounded || this.coyote > 0;
+    const wantsGroundJump = this.jumpBuffer > 0 || !!jumpHeld;
+    const canDoubleJump = !canGroundJump && this.jumps < 2 && this.jumps >= 0 && this.jumpBuffer > 0 && this.doubleReady;
+
+    if ((canGroundJump && wantsGroundJump) || canDoubleJump) {
+      // saut (double-saut autorisé : 2 sauts, mais double uniquement sur edge + stamina)
+      const isDouble = !canGroundJump && this.jumps >= 1;
       this.vel.y = this.jumpForce;
       this.jumps++; this.jumpBuffer = 0; this.coyote = 0; this.grounded = false;
-      if (isDouble) { audio?.doubleJump(); } else audio?.jump();
+      if (isDouble) { this.doubleCooldown = this.doubleDelay; this.doubleReady = false; audio?.doubleJump(); } else audio?.jump();
       this.squash = -0.25;
     }
     this.didBounce = false;

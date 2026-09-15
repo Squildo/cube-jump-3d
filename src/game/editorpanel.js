@@ -32,9 +32,17 @@ export class EditorPanel {
     on('editor-snap', 'input', e => {
       ed.snap = parseFloat(e.target.value);
       this._val('editor-snap-val').textContent = ed.snap === 0 ? 'libre' : ed.snap;
+      if (ed.transformControls) ed.transformControls.setTranslationSnap(ed.snap > 0 ? ed.snap : null);
     });
     on('editor-edity-minus', 'click', () => { ed.editY = Math.max(-4, ed.editY - 0.5); this.sync(); });
     on('editor-edity-plus', 'click', () => { ed.editY = Math.min(20, ed.editY + 0.5); this.sync(); });
+    on('editor-theme', 'change', e => {
+      const th = e.target.value;
+      g.world.applyTheme(th);
+      g.world.theme = th;
+      g.syncAfterEdit('theme');
+      g.toast(`🎨 Thème ${th === 'snow' ? 'Neige' : 'Forêt'} appliqué`);
+    });
 
     // --- actions ---
     on('editor-undo', 'click', () => ed.undo());
@@ -98,7 +106,10 @@ export class EditorPanel {
 
   _hintFor(tool) {
     const H = {
-      select: 'Clic = sélectionner / drag = déplacer • Suppr = effacer • Clic vide = orbite',
+      select: 'Roblox : clic droit = regarder • WASD+Shift = voler • Molette = zoom • Clic = sélectionner',
+      move: 'Gizmo Déplacer : flèches XYZ • Précision via grille',
+      rotate: 'Gizmo Pivoter : anneaux • Snap 15°',
+      scale: 'Gizmo Agrandir : cubes • Snap 0.25',
       platform: 'Clic = poser une plateforme (sur sol editY ou sur une plateforme)',
       'platform-move-x': 'Plateforme mobile axe X (violet)',
       'platform-move-z': 'Plateforme mobile axe Z (rose)',

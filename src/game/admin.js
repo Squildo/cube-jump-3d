@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { isAdminUnlocked } from './LevelData.js';
 
 // Panneau admin : vies, vol, pièces, niveaux, perso, score.
 // Utilisation : new AdminPanel(game) — lit/écrit directement game + game.player.
@@ -64,6 +65,7 @@ export class AdminPanel {
     // --- Perso ---
     on('admin-speed', 'input', e => { this.p.speed = parseFloat(e.target.value); this._val('admin-speed-val').textContent = this.p.speed.toFixed(1); });
     on('admin-jump', 'input', e => { this.p.jumpForce = parseFloat(e.target.value); this._val('admin-jump-val').textContent = this.p.jumpForce.toFixed(1); });
+    on('admin-double-delay', 'input', e => { this.p.doubleDelay = parseFloat(e.target.value); this._val('admin-double-delay-val').textContent = this.p.doubleDelay.toFixed(1) + 's'; });
 
     // --- Score ---
     on('admin-score-plus', 'click', () => { g.score += 100; g._hud(); this.sync(); });
@@ -73,7 +75,17 @@ export class AdminPanel {
     on('admin-kill', 'click', () => { g.godMode = false; this._val('admin-god').checked = false; g.die('spike'); this.sync(); });
   }
 
-  toggle() { this.el?.classList.toggle('hidden'); this.sync(); }
+  toggle() {
+    if (!isAdminUnlocked()) {
+      this.game?.toast('🔒 Admin verrouillé — entre le code dans le menu (🔑)');
+      this.game?.refreshAdminGateUI?.();
+      // ouvre le menu pour que le code soit visible
+      if (this.game?.state !== 'saves') this.game?.toMenu?.();
+      document.getElementById('admin-code-input')?.focus();
+      return;
+    }
+    this.el?.classList.toggle('hidden'); this.sync();
+  }
   hide() { this.el?.classList.add('hidden'); }
 
   sync() {
@@ -87,6 +99,7 @@ export class AdminPanel {
     set('admin-fly-speed', p.flySpeed); setText('admin-fly-speed-val', p.flySpeed);
     set('admin-speed', p.speed); setText('admin-speed-val', Number(p.speed).toFixed(1));
     set('admin-jump', p.jumpForce); setText('admin-jump-val', Number(p.jumpForce).toFixed(1));
+    set('admin-double-delay', p.doubleDelay); setText('admin-double-delay-val', Number(p.doubleDelay).toFixed(1) + 's');
     setText('admin-coins-info', `🪙 ${g.coinsTaken}/${g.totalCoins} • ⭐ ${g.score} • 🚩 Niv ${g.level + 1}/3`);
     // highlight niveau actif
     [1, 2, 3].forEach(n => this._val(`admin-lvl-${n}`)?.classList.toggle('active', g.level === n - 1));
