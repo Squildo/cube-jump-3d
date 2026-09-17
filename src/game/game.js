@@ -571,10 +571,10 @@ export class Game {
         this._show('gameover');
       }
     });
-    net.on('hello', (_d, peerId) => { // hôte : envoie le snapshot complet
-      if (this.multi?.role === 'host') this.sendSnap(peerId);
+    net.on('hello', (_d, peerId) => { // hôte : envoie le snapshot seulement s'il est déjà en jeu
+      if (this.multi?.role === 'host' && this.state === 'playing') this.sendSnap(peerId);
     });
-    net.on('snap', (d) => { // invité : applique le snapshot
+    net.on('snap', (d) => { // invité : applique le snapshot (démarrage si en salon)
       if (this.multi?.role !== 'guest' || !d) return;
       this.applySnap(d);
     });
@@ -589,14 +589,18 @@ export class Game {
       this._loadLevel(Math.max(0, Math.min(this.maxLevels - 1, d.idx)));
       this.toast(`🚩 Niveau ${this.level + 1} (coop)`);
     });
-    net.on('restart', () => { // invité : restart synchronisé
+    net.on('restart', () => { // invité : (re)démarrage synchronisé par l'hôte
       if (this.multi?.role !== 'guest') return;
+      this.ensureRemotePlayer();
       this.score = 0; this.lives = 3; this.time = 0;
       this._loadLevel(0);
+      this.player.reset(this.spawn);
+      this.remotePlayer?.reset(this.spawn);
       this.state = 'playing'; this._show(null);
       document.getElementById('hud')?.classList.remove('hidden');
-      this._hud();
-      this.toast('↻ Partie relancée par l\'hôte');
+      this._hud(); this.refreshNetUI();
+      this.toast('▶ Partie démarrée par l\'hôte !');
+      this.last = performance.now();
     });
     net.on('win', (d) => { // invité : victoire partagée
       if (this.multi?.role !== 'guest') return;
@@ -615,19 +619,25 @@ export class Game {
 
   onPeerJoined(peerId) {
     if (!this.multi) return;
-    this.ensureRemotePlayer();
     if (this.multi.role === 'host') {
-      this.sendSnap(peerId);
-      if (this.state !== 'playing') {
-        // l'hôte attendait au menu avec son code : démarrage auto à l'arrivée de J2
-        this.hostStartGame();
-        this.toast('🟢 J2 connecté — c\'est parti !');
-      } else {
+      if (this.state === 'playing') {
+        this.ensureRemotePlayer();
+        this.sendSnap(peerId);
         this.toast('🟢 J2 connecté !');
+      } else {
+        // hôte en salon : ne démarre pas auto, prévient seulement
+        this.toast('🟢 J2 a rejoint ! Clique ▶ Démarrer la partie');
+        this.setNetStatus(`🟢 J2 prêt — clique ▶ Démarrer la partie`);
+        // ne crée pas le joueur distant tant que la partie n'a pas démarré
       }
     } else {
+      // invité : prévient l'hôte et reste en attente si hôte pas encore en jeu
       this.net.send('hello', {});
-      this.toast('🟢 Connecté à l\'hôte !');
+      if (this.state !== 'playing') {
+        this.toast('🟢 Connecté à l\'hôte ! En attente du démarrage...');
+      } else {
+        this.toast('🟢 Connecté à l\'hôte !');
+      }
     }
     this.refreshNetUI();
   }
@@ -730,13 +740,14 @@ export class Game {
       await this.net.join(raw);
       const code = this.net.code || raw.toUpperCase().replace(/^CJ-/, '');
       this.multi = { role: 'guest', code };
-      this.ensureRemotePlayer();
-      this._startCoopGame();
-      // hello déjà envoyé via onPeerJoined, mais on force
-      this.net.send('hello', {});
+      // Reste au salon, ne démarre pas la partie : seul l'hôte peut démarrer
+      // Si l'hôte est déjà en jeu, il enverra un snap et on rejoindra direct
+      this.state = 'menu'; this._show('menu');
+      document.getElementById('hud')?.classList.add('hidden');
       this.refreshNetUI();
-      this.setNetStatus('🟢 Connecté ! Partie lancée.');
-      this.toast('🟢 Connecté à ' + code + ' !');
+      this.setNetStatus('🟢 Connecté au salon ' + code + ' — en attente que l\'hôte démarre...');
+      this.toast('🟢 Connecté à ' + code + ' — attente hôte');
+      this.net.send('hello', {});
     } catch (e) {
       console.warn('[net] join', e);
       const msg = e.message || 'Connexion échouée';
@@ -768,7 +779,8 @@ export class Game {
     this._loadLevel(0);
     this.state = 'playing'; this._show(null);
     document.getElementById('hud')?.classList.remove('hidden');
-    this.ensureRemotePlayer();
+    if (this.net.hasPeer) this.ensureRemotePlayer();
+    else this.removeRemotePlayer(); // pas de fantôme J2 si personne n'a rejoint
     this.player.reset(this.spawn);
     this._hud(); this.refreshNetUI();
     this.net.send('restart', {});
@@ -873,6 +885,8 @@ export class Game {
     }, target);
   }
   applySnap(d) {
+    // Invité : rejoint la partie en cours de l'hôte
+    this.ensureRemotePlayer();
     if (Number.isInteger(d.levelIdx) && d.levelIdx !== this.level) this._loadLevel(Math.max(0, Math.min(this.maxLevels - 1, d.levelIdx)));
     if (Array.isArray(d.taken)) {
       d.taken.forEach((t, i) => {
@@ -889,6 +903,7 @@ export class Game {
       this.remotePlayer.netPos = { x: d.pos[0], y: d.pos[1], z: d.pos[2], vx: 0, vy: 0, vz: 0, t: performance.now() };
     }
     this.player.reset(this.spawn);
+    this.remotePlayer?.reset(this.spawn);
     this.state = 'playing'; this._show(null);
     document.getElementById('hud')?.classList.remove('hidden');
     this._hud(); this.refreshNetUI();
@@ -930,8 +945,11 @@ export class Game {
       if (hc && isHost && this.multi.code) hc.textContent = this.multi.code;
       const gt = document.getElementById('guest-target');
       if (gt && isGuest) gt.textContent = this.multi.code;
-      if (this.net.hasPeer) this.setNetStatus('🟢 Partenaire connecté — coop !');
-      else if (isHost) {
+      if (this.net.hasPeer) {
+        if (this.state === 'playing') this.setNetStatus('🟢 Partenaire connecté — coop !');
+        else if (isHost) this.setNetStatus(`🟢 J2 prêt — clique ▶ Démarrer la partie`);
+        else this.setNetStatus('🟡 Connecté — en attente que l\'hôte démarre la partie...');
+      } else if (isHost) {
         const turnHint = new URLSearchParams(location.search).has('turn') ? ' (TURN actif)' : '';
         this.setNetStatus(`🟡 En attente de J2... Partage le code ${this.multi.code}${turnHint} ou le lien ?join=${this.multi.code}`);
       } else {
