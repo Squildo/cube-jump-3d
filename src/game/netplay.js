@@ -3,7 +3,7 @@
 // Double config NAT à tester : ?turn=1 active un TURN public (openrelay) en plus du STUN Google.
 // Lien partageable : ?join=CODE pré-remplit le champ invité.
 
-const ACTION_TYPES = ['pos', 'coinGet', 'coinTaken', 'hurt', 'state', 'hello', 'snap', 'goal', 'level', 'restart', 'win', 'bye', 'full'];
+const ACTION_TYPES = ['pos', 'coinGet', 'coinTaken', 'hurt', 'state', 'hello', 'snap', 'goal', 'level', 'restart', 'win', 'bye', 'full', 'editorSync'];
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans I/O/0/1 ambigus
 const CODE_LEN = 6;

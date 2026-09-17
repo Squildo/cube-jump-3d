@@ -66,6 +66,9 @@ export class Game {
     this._goalReady = { host: false, guest: false };
     this._goalToastDone = false;
     this._sentCoins = new Set();
+    this._editorSyncTimer = null;
+    this._applyingEditorSync = false;
+    this._pendingEditorSync = null;
 
     this._bindUI();
     this.admin = new AdminPanel(this);
@@ -665,6 +668,10 @@ export class Game {
       if (this.multi?.role !== 'guest' || !d) return;
       this.applySnap(d);
     });
+    net.on('editorSync', (d) => { // sync éditeur : applique le niveau de l'autre
+      if (!this.multi) return;
+      this.applyEditorSync(d);
+    });
     net.on('goal', () => { // hôte : l'invité est au drapeau
       if (this.multi?.role !== 'host') return;
       this._goalReady.guest = true;
@@ -1124,6 +1131,14 @@ export class Game {
       this.toMenu();
     }
     this.last = performance.now();
+    // sync éditeur en multi : applique d'abord une mise à jour en attente sinon pousse la notre
+    if (this._pendingEditorSync) {
+      const pending = this._pendingEditorSync;
+      this._pendingEditorSync = null;
+      this.applyEditorSync(pending);
+    } else if (this.multi && this.net.hasPeer) {
+      this._broadcastEditorSync();
+    }
   }
   playtest() {
     if (this.state !== 'editing') { this.enterEditor(); return; }
@@ -1158,8 +1173,18 @@ export class Game {
     this.toast('⏹ Retour édition');
     this.last = performance.now();
   }
-  /** Appelé après chaque mutation de l'éditeur : HUD + autosave */
+  /** Appelé après chaque mutation de l'éditeur : HUD + autosave + sync multi */
   syncAfterEdit(_src, silent = false) {
+    // évite boucle infinie quand on applique un sync distant
+    if (this._applyingEditorSync) {
+      // maj locale sans rebroadcast
+      this.spawn.copy(this.world.spawnPos);
+      this.totalCoins = this.world.coins.length;
+      this.coinsTaken = Math.min(this.coinsTaken, this.totalCoins);
+      this._hud(); this.admin?.sync();
+      if (!silent) this.editorPanel?.sync();
+      return;
+    }
     this.spawn.copy(this.world.spawnPos);
     this.totalCoins = this.world.coins.length;
     this.coinsTaken = Math.min(this.coinsTaken, this.totalCoins);
@@ -1177,6 +1202,74 @@ export class Game {
       this._autosaveT = setTimeout(() => {
         try { saveCustomSlot(slot, this.world.serialize()); this.editorPanel?.sync(); } catch { /* quota */ }
       }, 600);
+    }
+    // --- sync multi : envoi du niveau à l'autre joueur ---
+    if (this.multi && this.net.hasPeer) {
+      // Seulement si on est en édition et admin (host ou admin en multi)
+      // On broadcast même si invité admin édite, l'autre recevra
+      if (this.state === 'editing' || _src === 'gizmo' || _src === 'drag' || _src === 'place' || _src === 'delete' || _src === 'editor') {
+        this.scheduleEditorSync();
+      }
+    }
+  }
+  scheduleEditorSync() {
+    if (!this.multi || !this.net.hasPeer) return;
+    // Debounce 180ms pour éviter spam pendant drag gizmo
+    clearTimeout(this._editorSyncTimer);
+    this._editorSyncTimer = setTimeout(() => this._broadcastEditorSync(), 180);
+  }
+  _broadcastEditorSync() {
+    if (!this.multi || !this.net.hasPeer || this._applyingEditorSync) return;
+    try {
+      const data = this.world.serialize();
+      // payload léger : on limite les décimales déjà via serialize
+      this.net.send('editorSync', data);
+      // console.log('[editorSync] broadcast', data.platforms.length, 'plats');
+    } catch (e) { console.warn('[editorSync] serialize', e); }
+  }
+  applyEditorSync(data) {
+    if (!data || !data.platforms) { console.warn('[editorSync] invalide'); return; }
+    // Si on est en train d'éditer localement, on met en attente pour ne pas écraser le drag en cours
+    if (this.state === 'editing' && this.editor.enabled) {
+      this._pendingEditorSync = data;
+      this.toast('🔄 L\'autre joueur a modifié le niveau (appliqué à la sortie)');
+      return;
+    }
+    try {
+      this._applyingEditorSync = true;
+      const prevSpawn = this.spawn.clone();
+      const { spawn, totalCoins } = this.world.loadLevel(data);
+      this.spawn.copy(spawn);
+      this.totalCoins = totalCoins;
+      // Si le nombre de pièces a changé, on recalcule coinsTaken
+      if (this.world.coins.length !== totalCoins) {
+        // garde coins pris cohérent
+        this.coinsTaken = Math.min(this.coinsTaken, totalCoins);
+      }
+      // Si on est en jeu, repositionne le joueur proche de l'ancien spawn si besoin
+      // On ne reset pas le joueur pour ne pas interrompre le saut, sauf si on était sur une plateforme supprimée
+      // Pour simplifier, on garde le joueur où il est, la physique fera le reste
+      if (this.state === 'playing') {
+        // si le spawn a beaucoup bougé et qu'on est au spawn, on resync
+        if (prevSpawn.distanceTo(spawn) > 2 && this.player.position.distanceTo(prevSpawn) < 3) {
+          this.player.reset(spawn);
+        }
+      } else if (this.state === 'editing') {
+        // en édition mais pas en drag actif, on resync l'éditeur
+        this.editor.select(null);
+        this.editor.onSelect?.(null);
+      }
+      // Si l'autre était en édition, on affiche un toast côté réception
+      if (this.state === 'playing') {
+        this.toast('🧱 Niveau mis à jour par l\'autre joueur');
+      }
+      this._hud();
+      this.editorPanel?.sync();
+      this.syncAfterEdit('editorSync-remote', true); // silent sans rebroadcast (flag empêche boucle)
+    } catch (e) {
+      console.warn('[editorSync] apply', e);
+    } finally {
+      this._applyingEditorSync = false;
     }
   }
   loadCustom(slot) {
