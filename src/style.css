@@ -62,18 +62,14 @@ kbd { background: #222; color: #fff; border-radius: 6px; padding: 2px 8px; font-
 .multi-title { font-weight: 800; font-size: 13px; margin-bottom: 8px; color: #1d4ed8; }
 .multi-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: stretch; flex-wrap: wrap; }
 .multi-row .ghost-btn { margin-top: 0; flex: 1; min-width: 120px; white-space: nowrap; }
-.multi-row #multi-code { flex: 1 1 110px; min-width: 110px; max-width: 140px; text-transform: uppercase; text-align: center; font-weight: 900; font-size: 18px;
-  letter-spacing: 3px; border: 2px solid #93c5fd; border-radius: 12px; padding: 8px; }
-.multi-code-line { font-size: 18px; margin-bottom: 4px; }
-.multi-code-line b { letter-spacing: 4px; color: #1d4ed8; }
-#btn-multi-copy { border: none; background: none; font-size: 18px; cursor: pointer; }
 #multi-status { min-height: 18px; word-break: break-word; }
 #hud-net { border-color: rgba(96,165,250,.6); }
-#multi-manual { margin-top: 8px; }
-#multi-manual textarea { width: 100%; min-height: 56px; max-height: 110px; font-family: monospace; font-size: 10px;
+/* QR multijoueur */
+.qr-canvas { display: block; width: 220px; height: 220px; margin: 6px auto; background: #fff;
+  border: 4px solid #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.2); image-rendering: pixelated; }
+.qr-video { display: block; width: 100%; max-height: 260px; border-radius: 12px; background: #000; margin: 6px 0; }
+.qr-text { width: 100%; min-height: 40px; max-height: 80px; font-family: monospace; font-size: 10px;
   border: 2px solid #93c5fd; border-radius: 10px; padding: 6px; margin-bottom: 6px; word-break: break-all; resize: vertical; }
-.multi-label { font-size: 12px; font-weight: 700; color: #1e40af; margin: 2px 0 4px; }
-#btn-manual-toggle { margin-top: 8px; font-size: 13px; }
 
 /* Admin gate (menu) */
 .admin-gate-box { background: #fef9e7; border: 2px dashed #fbbf24; border-radius: 14px; padding: 12px; margin-top: 14px; }
@@ -187,7 +183,6 @@ kbd { background: #222; color: #fff; border-radius: 6px; padding: 2px 8px; font-
   .save-slot-actions { justify-content: stretch; }
   .save-slot-actions button { flex: 1; }
   .multi-row { flex-direction: column; }
-  .multi-row #multi-code { max-width: 100%; }
   .multi-row .ghost-btn { width: 100%; min-width: unset; }
   #toast { top: 60px; font-size: 13px; padding: 8px 14px; max-width: 90vw; text-align: center; }
 }

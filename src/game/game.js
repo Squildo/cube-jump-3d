@@ -11,6 +11,7 @@ import { Editor } from './editor.js';
 import { EditorPanel } from './editorpanel.js';
 import { validate, loadCustomSlots, saveCustomSlot, blankLevel, loadProgressSlots, saveProgressSlot, clearProgressSlot, isAdminUnlocked, setAdminUnlocked, checkAdminCode, isEditorUnlocked, setEditorUnlocked, WORLDS, getWorldLevel, getWorldTheme } from './leveldata.js';
 import { Netplay } from './netplay.js';
+import { drawQR, scanQR, QR_OFFER_PREFIX, QR_ANSWER_PREFIX } from './qr.js';
 
 export class Game {
   constructor(canvas) {
@@ -61,9 +62,8 @@ export class Game {
     this.net = new Netplay(this);
     this.multi = null; // {role:'host'|'guest', code}
     this.remotePlayer = null;
-    this._snapReceived = false;
-    this._joinTimeout = null;
-    this._helloTimer = null;
+    this._scanCleanup = null;
+    this._scanToken = 0;
     this._posT = 0; this._stateT = 0; this._goalSendT = 0;
     this._goalReady = { host: false, guest: false };
     this._goalToastDone = false;
@@ -99,32 +99,21 @@ export class Game {
     click('btn-quit-win', () => this.toMenu());
     click('btn-pause', () => this.pause());
     click('btn-editor', () => this.toggleEditor());
-    click('btn-multi-host', () => this.hostMulti());
+    click('btn-qr-host', () => this.hostQR());
+    click('btn-qr-join', () => this.guestScan());
+    click('btn-qr-scan-answer', () => this.hostScan());
+    click('btn-qr-stopscan', () => this.stopScanUI());
     click('btn-multi-start', () => this.hostStartGame());
-    click('btn-multi-join', () => this.joinMulti());
     click('btn-multi-leave', () => this.leaveMulti());
     click('btn-net-leave', () => this.leaveMulti());
-    click('btn-manual-toggle', () => document.getElementById('multi-manual')?.classList.toggle('hidden'));
-    click('btn-manual-offer', () => this.manualOffer());
-    click('btn-manual-answer', () => this.manualAnswer());
-    click('btn-manual-connect', () => this.manualConnect());
-    $('btn-manual-copy1')?.addEventListener('click', () => copyText('manual-offer-out', '📋 Code hôte copié !'));
-    $('btn-manual-copy2')?.addEventListener('click', () => copyText('manual-answer-out', '📋 Réponse copiée !'));
     const copyText = (id, okMsg) => {
       const el = document.getElementById(id);
       if (!el?.value) { this.toast('Rien à copier pour l\'instant'); return; }
       el.select();
       navigator.clipboard?.writeText(el.value).then(() => this.toast(okMsg)).catch(() => this.toast('Sélectionné — fais Ctrl+C'));
     };
-    $('btn-multi-copy')?.addEventListener('click', () => {
-      const code = this.multi?.code || '';
-      if (!code) return;
-      navigator.clipboard?.writeText(code).then(() => this.toast('📋 Code copié !')).catch(() => this.toast('Code : ' + code));
-    });
-    $('multi-code')?.addEventListener('keydown', e => {
-      if (e.code === 'Enter') { e.preventDefault(); this.joinMulti(); }
-      e.stopPropagation();
-    });
+    $('btn-qr-copy')?.addEventListener('click', () => copyText('qr-host-text', '📋 Texte QR copié !'));
+    $('btn-qr-answer-copy')?.addEventListener('click', () => copyText('qr-answer-text', '📋 Réponse copiée !'));
     click('btn-change-save', () => this.showSaveSelect());
     click('btn-world-back', () => { this.state='menu'; this._show('menu'); });
     click('btn-level-back', () => this.showWorldSelect());
@@ -673,25 +662,113 @@ export class Game {
     this.remotePlayer = null;
   }
 
-  async hostMulti() {
-    if (this.multi) { this.toast('Déjà en partie (🚪 pour quitter)'); return; }
-    if (this.state === 'editing' || this.playtesting) { this.toast('Quitte l\'éditeur d\'abord'); return; }
-    this.setNetStatus('⏳ Création du salon...');
+  // ----- SALON QR (aucun code à taper, aucun relais réseau) -----
+  // Hôte : hostQR() affiche son QR. Invité : guestScan() scanne le QR hôte
+  // puis affiche sa réponse en QR. Hôte : hostScan() scanne la réponse.
+  _lobbyGuard() {
+    if (this.multi) { this.toast('Déjà en partie (🚪 pour quitter)'); return true; }
+    if (this.state === 'editing' || this.playtesting) { this.toast('Quitte l\'éditeur d\'abord'); return true; }
+    return false;
+  }
+  _startManualGame() {
+    this._goalReady = { host: false, guest: false };
+    this.score = 0; this.lives = 3; this.time = 0;
+    this._loadLevel(0);
+    this.state = 'playing'; this._show(null);
+    document.getElementById('hud')?.classList.remove('hidden');
+    this.refreshNetUI();
+    this.last = performance.now();
+  }
+  async hostQR() { // HÔTE : génère l'offre et l'affiche en QR
+    if (this._lobbyGuard()) return;
+    this.setNetStatus('⏳ Génération du QR (rassemblement réseau local)...');
     try {
-      const code = await this.net.host();
-      this.multi = { role: 'host', code };
-      this._goalReady = { host: false, guest: false };
-      // Reste au menu : le code reste visible pour le copier/partager tranquillement.
-      // La partie démarre via ▶ Démarrer, ou auto quand J2 arrive.
+      const offer = await this.net.manualHost();
+      await drawQR(document.getElementById('qr-host'), QR_OFFER_PREFIX + offer);
+      document.getElementById('qr-host-text').value = QR_OFFER_PREFIX + offer;
+      this.multi = { role: 'host', code: 'QR' };
+      // Reste au menu : le QR reste visible pour le montrer à l'invité.
+      // Démarrage via ▶ Démarrer, ou auto quand l'invité se connecte.
       this.state = 'menu'; this._show('menu');
       document.getElementById('hud')?.classList.add('hidden');
       this.refreshNetUI();
-      this.toast(`🌐 Salon ${code} — partage le code !`);
+      this.setNetStatus('📱 Montre ce QR à l\'invité, puis 📷 scanne sa réponse ci-dessous.');
+      this.toast('📱 QR affiché — montre-le !');
     } catch (e) {
-      console.warn('[net] host', e);
-      this.setNetStatus('❌ Échec réseau (CDN WebRTC injoignable ?)');
-      this.toast('❌ Multi indisponible hors-ligne');
+      console.warn('[net] hostQR', e);
+      this.setNetStatus('❌ ' + (e.message || 'Échec WebRTC dans ce navigateur'));
+      this.toast('❌ ' + (e.message || 'WebRTC indisponible ici'));
     }
+  }
+  async guestScan() { // INVITÉ : scanne le QR hôte, affiche sa réponse en QR
+    if (this._lobbyGuard()) return;
+    this.setNetStatus('📷 Pointe la caméra vers le QR de l\'hôte...');
+    try {
+      const raw = await this._scanOnce('guest');
+      const answer = await this.net.manualAnswer(raw);
+      await drawQR(document.getElementById('qr-answer'), QR_ANSWER_PREFIX + answer);
+      document.getElementById('qr-answer-text').value = QR_ANSWER_PREFIX + answer;
+      this.multi = { role: 'guest', code: 'QR' };
+      this.ensureRemotePlayer();
+      this._startManualGame();
+      this.refreshNetUI();
+      this.setNetStatus('📱 Montre ce QR-réponse à l\'hôte pour qu\'il le scanne. La partie démarre à la connexion.');
+      this.toast('✅ QR scanné — montre ta réponse !');
+    } catch (e) {
+      console.warn('[net] guestScan', e);
+      this.setNetStatus('❌ ' + (e.message || 'Scan impossible'));
+      this.toast('❌ ' + (e.message || 'Scan impossible'));
+    }
+  }
+  async hostScan() { // HÔTE : scanne le QR-réponse de l'invité -> connecté
+    if (!this.multi || this.multi.role !== 'host' || !this.net.manual) {
+      this.toast('Affiche d\'abord ton QR avec 📱 Héberger');
+      return;
+    }
+    this.setNetStatus('📷 Pointe la caméra vers le QR-réponse de l\'invité...');
+    try {
+      const raw = await this._scanOnce('host');
+      await this.net.manualConnect(raw);
+      this.setNetStatus('⏳ Connexion directe en cours...');
+      this.toast('⏳ Connexion...');
+    } catch (e) {
+      console.warn('[net] hostScan', e);
+      this.setNetStatus('❌ ' + (e.message || 'Scan impossible'));
+      this.toast('❌ ' + (e.message || 'Scan impossible'));
+    }
+  }
+  // Ouvre la caméra partagée, scanne un QR et valide son préfixe.
+  // Retourne le contenu brut ; coupe la caméra dans tous les cas.
+  async _scanOnce(expectRole) {
+    const video = document.getElementById('qr-video');
+    document.getElementById('btn-qr-stopscan')?.classList.remove('hidden');
+    this._scanToken = (this._scanToken || 0) + 1;
+    const token = this._scanToken;
+    const cleanup = () => {
+      if (this._scanToken !== token) return;
+      document.getElementById('qr-video')?.classList.add('hidden');
+      document.getElementById('btn-qr-stopscan')?.classList.add('hidden');
+    };
+    this._scanCleanup = cleanup;
+    try {
+      const { value } = await scanQR(video);
+      if (this._scanToken !== token) throw new Error('Scan annulé');
+      const want = expectRole === 'host' ? QR_ANSWER_PREFIX : QR_OFFER_PREFIX;
+      const got = String(value || '').trim();
+      if (!got.startsWith(want)) {
+        throw new Error(expectRole === 'host'
+          ? 'Ce n\'est pas un QR-réponse (attendu : celui affiché chez l\'invité)'
+          : 'Ce n\'est pas un QR d\'hôte (attendu : celui affiché chez l\'hôte)');
+      }
+      return got;
+    } finally {
+      cleanup();
+    }
+  }
+  stopScanUI() { // referme la caméra (bouton ⏹ ou changement d'écran)
+    this._scanToken = (this._scanToken || 0) + 1;
+    try { this._scanCleanup?.(); } catch { /* ignore */ }
+    this._scanCleanup = null;
   }
   hostStartGame() { // l'hôte lance (ou relance) la partie coop, l'invité est resynchronisé
     if (!this.multi || this.multi.role !== 'host') return;
@@ -708,118 +785,10 @@ export class Game {
     this.toast(this.net.hasPeer ? '▶ C\'est parti (coop) !' : '▶ Partie lancée — en attente de J2...');
     this.last = performance.now();
   }
-  async joinMulti() {
-    if (this.multi) { this.toast('Déjà en partie (🚪 pour quitter)'); return; }
-    if (this.state === 'editing' || this.playtesting) { this.toast('Quitte l\'éditeur d\'abord'); return; }
-    const input = document.getElementById('multi-code');
-    const code = (input?.value || '').trim().toUpperCase();
-    if (!code) { this.toast('⌨️ Entre le code du salon'); return; }
-    this.setNetStatus('⏳ Connexion à ' + code + '...');
-    try {
-      await this.net.join(code);
-    } catch (e) {
-      this.setNetStatus('❌ ' + (e.message || 'Échec réseau'));
-      this.toast('❌ ' + (e.message || 'Connexion impossible'));
-      return;
-    }
-    this.multi = { role: 'guest', code };
-    this._snapReceived = false;
-    this.ensureRemotePlayer();
-    this.net.send('hello', {});
-    this.startHelloRetry();
-    this.refreshNetUI();
-    clearTimeout(this._joinTimeout);
-    this._joinTimeout = setTimeout(() => {
-      if (this.multi?.role === 'guest' && !this._snapReceived) {
-        this.toast('❌ Hôte introuvable — vérifie le code et la connexion');
-        this.setNetStatus('❌ Pas de réponse de l\'hôte. Vérifie : 1) le code exact, 2) que l\'hôte a cliqué « Créer un salon » et attend, 3) internet des 2 côtés. Si ton réseau bloque les relais publics, utilise la 🛠️ connexion manuelle ci-dessous.');
-        this.leaveMulti(true);
-      }
-    }, 30000);
-  }
-  startHelloRetry() { // renvoie hello tant que l'hôte ne répond pas
-    clearInterval(this._helloTimer);
-    this._helloTimer = setInterval(() => {
-      if (this.multi?.role === 'guest' && !this._snapReceived) this.net.send('hello', {});
-      else clearInterval(this._helloTimer);
-    }, 3000);
-  }
-  // ----- CONNEXION MANUELLE (copier-coller, aucun relais réseau) -----
-  _manualGuard() {
-    if (this.multi) { this.toast('Déjà en partie (🚪 pour quitter)'); return true; }
-    if (this.state === 'editing' || this.playtesting) { this.toast('Quitte l\'éditeur d\'abord'); return true; }
-    return false;
-  }
-  _startManualGame() {
-    this._goalReady = { host: false, guest: false };
-    this.score = 0; this.lives = 3; this.time = 0;
-    this._loadLevel(0);
-    this.state = 'playing'; this._show(null);
-    document.getElementById('hud')?.classList.remove('hidden');
-    this.refreshNetUI();
-    this.last = performance.now();
-  }
-  async manualOffer() { // HÔTE 1️⃣ : génère le code à partager
-    if (this._manualGuard()) return;
-    this.setNetStatus('⏳ Génération du code (rassemblement réseau local)...');
-    try {
-      const code = await this.net.manualHost();
-      document.getElementById('manual-offer-out').value = code;
-      this.multi = { role: 'host', code: 'MANUEL' };
-      // Reste au menu pour garder les zones de code visibles ; démarrage via
-      // ▶ Démarrer ou auto à la connexion de l'invité (onPeerJoined).
-      this.state = 'menu'; this._show('menu');
-      document.getElementById('hud')?.classList.add('hidden');
-      this.refreshNetUI();
-      this.setNetStatus('📋 Envoie ce code à l\'autre joueur, puis colle sa réponse ci-dessous et clique 3️⃣ Connecter.');
-      this.toast('📋 Code généré — partage-le !');
-    } catch (e) {
-      console.warn('[net] manual offer', e);
-      this.setNetStatus('❌ Échec WebRTC dans ce navigateur');
-      this.toast('❌ WebRTC indisponible ici');
-    }
-  }
-  async manualAnswer() { // INVITÉ 2️⃣ : colle le code hôte -> génère sa réponse
-    if (this._manualGuard()) return;
-    const offer = document.getElementById('manual-offer-in')?.value || '';
-    if (!offer.trim()) { this.toast('⌨️ Colle d\'abord le code de l\'hôte'); return; }
-    this.setNetStatus('⏳ Génération de ta réponse...');
-    try {
-      const answer = await this.net.manualAnswer(offer);
-      document.getElementById('manual-answer-out').value = answer;
-      this.multi = { role: 'guest', code: 'MANUEL' };
-      this._snapReceived = false;
-      this.ensureRemotePlayer();
-      this._startManualGame();
-      this.startHelloRetry();
-      this.setNetStatus('📋 Renvoie ce code-réponse à l\'hôte. La partie démarre dès qu\'il clique Connecter.');
-      this.toast('📋 Réponse générée — renvoie-la à l\'hôte !');
-    } catch (e) {
-      this.setNetStatus('❌ ' + (e.message || 'Code invalide'));
-      this.toast('❌ ' + (e.message || 'Code invalide'));
-    }
-  }
-  async manualConnect() { // HÔTE 3️⃣ : colle la réponse -> connecté
-    if (!this.multi || this.multi.role !== 'host' || !this.net.manual) {
-      this.toast('Génère d\'abord ton code avec 1️⃣');
-      return;
-    }
-    const ans = document.getElementById('manual-answer-in')?.value || '';
-    if (!ans.trim()) { this.toast('⌨️ Colle la réponse de l\'invité'); return; }
-    try {
-      await this.net.manualConnect(ans);
-      this.setNetStatus('⏳ Connexion directe en cours...');
-      this.toast('⏳ Connexion...');
-    } catch (e) {
-      this.setNetStatus('❌ ' + (e.message || 'Code invalide'));
-      this.toast('❌ ' + (e.message || 'Code invalide'));
-    }
-  }
   leaveMulti(silent = false) {
     if (!this.multi) return;
     this.net.leave();
-    clearTimeout(this._joinTimeout);
-    clearInterval(this._helloTimer);
+    this.stopScanUI();
     this.removeRemotePlayer();
     this.multi = null;
     this._goalReady = { host: false, guest: false };
@@ -910,8 +879,6 @@ export class Game {
     }, target);
   }
   applySnap(d) {
-    this._snapReceived = true;
-    clearTimeout(this._joinTimeout);
     if (Number.isInteger(d.levelIdx) && d.levelIdx !== this.level) this._loadLevel(Math.max(0, Math.min(this.maxLevels - 1, d.levelIdx)));
     if (Array.isArray(d.taken)) {
       d.taken.forEach((t, i) => {
@@ -942,7 +909,10 @@ export class Game {
   refreshNetUI() {
     const inMulti = !!this.multi;
     const isHost = inMulti && this.multi.role === 'host';
+    const isGuest = inMulti && this.multi.role === 'guest';
     document.getElementById('multi-offline')?.classList.toggle('hidden', inMulti);
+    document.getElementById('multi-host-panel')?.classList.toggle('hidden', !isHost);
+    document.getElementById('multi-guest-panel')?.classList.toggle('hidden', !isGuest);
     document.getElementById('multi-online')?.classList.toggle('hidden', !inMulti);
     document.getElementById('btn-net-leave')?.classList.toggle('hidden', !inMulti);
     document.getElementById('btn-multi-start')?.classList.toggle('hidden', !isHost);
@@ -952,19 +922,17 @@ export class Game {
       if (inMulti) {
         const peer = this.net.hasPeer ? '🟢' : '🟡';
         const who = this.multi.role === 'host' ? 'Hôte' : 'Invité';
-        pill.textContent = `🌐 ${this.multi.code} • ${who} ${peer}`;
+        pill.textContent = `🌐 QR • ${who} ${peer}`;
       }
     }
     if (inMulti) {
-      const el = document.getElementById('multi-code-show');
-      if (el) el.textContent = this.multi.code;
       const role = document.getElementById('multi-role');
-      if (role) role.textContent = this.multi.role === 'host' ? '👑 Tu es l\'hôte' : '🤝 Tu es invité(e)';
+      if (role) role.textContent = isHost ? '👑 Tu es l\'hôte' : '🤝 Tu es invité(e)';
       this.setNetStatus(this.net.hasPeer
         ? '🟢 Partenaire connecté — coop !'
-        : (this.multi.role === 'host'
-          ? '🟡 Salon ouvert — copie le code 📋 et envoie-le à ton partenaire, puis clique ▶ Démarrer (ou ça démarrera tout seul à son arrivée).'
-          : '🟡 Connexion à l\'hôte... (aucune acceptation requise côté hôte, ça se fait tout seul)'));
+        : (isHost
+          ? '🟡 Montre ton QR à l\'invité, puis scanne sa réponse.'
+          : '🟡 En attente de l\'hôte...'));
     }
   }
 
