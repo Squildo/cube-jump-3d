@@ -9,8 +9,8 @@ const ACTION_TYPES = ['pos', 'coinGet', 'coinTaken', 'hurt', 'state', 'hello', '
 const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 
 // Préfixes des payloads QR (auto-détection au scan)
-export const QR_OFFER_PREFIX = 'CJ1:';
-export const QR_ANSWER_PREFIX = 'CJ2:';
+import { QR_OFFER_PREFIX, QR_ANSWER_PREFIX } from './qr.js';
+export { QR_OFFER_PREFIX, QR_ANSWER_PREFIX };
 
 export class Netplay {
   constructor(game) {

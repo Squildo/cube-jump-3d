@@ -2,6 +2,9 @@
 // lecture caméra (BarcodeDetector natif, sinon jsQR en repli).
 const QRGEN_URL = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js';
 const JSQR_URL = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+// Préfixes des payloads QR (auto-détection au scan) — même valeurs que netplay.js
+export const QR_OFFER_PREFIX = 'CJ1:';
+export const QR_ANSWER_PREFIX = 'CJ2:';
 export const QR_MAX_CHARS = 2600; // garde-fou capacité (ECC bas)
 
 function loadScriptOnce(url, globalName) {
