@@ -100,6 +100,7 @@ export class Game {
     click('btn-pause', () => this.pause());
     click('btn-editor', () => this.toggleEditor());
     click('btn-multi-host', () => this.hostMulti());
+    click('btn-multi-start', () => this.hostStartGame());
     click('btn-multi-join', () => this.joinMulti());
     click('btn-multi-leave', () => this.leaveMulti());
     click('btn-net-leave', () => this.leaveMulti());
@@ -628,7 +629,13 @@ export class Game {
     this.ensureRemotePlayer();
     if (this.multi.role === 'host') {
       this.sendSnap(peerId);
-      this.toast('🟢 J2 connecté !');
+      if (this.state !== 'playing') {
+        // l'hôte attendait au menu avec son code : démarrage auto à l'arrivée de J2
+        this.hostStartGame();
+        this.toast('🟢 J2 connecté — c\'est parti !');
+      } else {
+        this.toast('🟢 J2 connecté !');
+      }
     } else {
       this.net.send('hello', {});
       this.toast('🟢 Connecté à l\'hôte !');
@@ -674,10 +681,10 @@ export class Game {
       const code = await this.net.host();
       this.multi = { role: 'host', code };
       this._goalReady = { host: false, guest: false };
-      this.score = 0; this.lives = 3; this.time = 0;
-      this._loadLevel(0);
-      this.state = 'playing'; this._show(null);
-      document.getElementById('hud')?.classList.remove('hidden');
+      // Reste au menu : le code reste visible pour le copier/partager tranquillement.
+      // La partie démarre via ▶ Démarrer, ou auto quand J2 arrive.
+      this.state = 'menu'; this._show('menu');
+      document.getElementById('hud')?.classList.add('hidden');
       this.refreshNetUI();
       this.toast(`🌐 Salon ${code} — partage le code !`);
     } catch (e) {
@@ -685,6 +692,21 @@ export class Game {
       this.setNetStatus('❌ Échec réseau (CDN WebRTC injoignable ?)');
       this.toast('❌ Multi indisponible hors-ligne');
     }
+  }
+  hostStartGame() { // l'hôte lance (ou relance) la partie coop, l'invité est resynchronisé
+    if (!this.multi || this.multi.role !== 'host') return;
+    this.score = 0; this.lives = 3; this.time = 0;
+    this._loadLevel(0);
+    this.state = 'playing'; this._show(null);
+    document.getElementById('hud')?.classList.remove('hidden');
+    this.ensureRemotePlayer();
+    this.player.reset(this.spawn);
+    this._hud(); this.refreshNetUI();
+    this.net.send('restart', {});
+    this.sendSnap();
+    this.netSyncState();
+    this.toast(this.net.hasPeer ? '▶ C\'est parti (coop) !' : '▶ Partie lancée — en attente de J2...');
+    this.last = performance.now();
   }
   async joinMulti() {
     if (this.multi) { this.toast('Déjà en partie (🚪 pour quitter)'); return; }
@@ -744,7 +766,11 @@ export class Game {
       const code = await this.net.manualHost();
       document.getElementById('manual-offer-out').value = code;
       this.multi = { role: 'host', code: 'MANUEL' };
-      this._startManualGame();
+      // Reste au menu pour garder les zones de code visibles ; démarrage via
+      // ▶ Démarrer ou auto à la connexion de l'invité (onPeerJoined).
+      this.state = 'menu'; this._show('menu');
+      document.getElementById('hud')?.classList.add('hidden');
+      this.refreshNetUI();
       this.setNetStatus('📋 Envoie ce code à l\'autre joueur, puis colle sa réponse ci-dessous et clique 3️⃣ Connecter.');
       this.toast('📋 Code généré — partage-le !');
     } catch (e) {
@@ -915,9 +941,11 @@ export class Game {
   }
   refreshNetUI() {
     const inMulti = !!this.multi;
+    const isHost = inMulti && this.multi.role === 'host';
     document.getElementById('multi-offline')?.classList.toggle('hidden', inMulti);
     document.getElementById('multi-online')?.classList.toggle('hidden', !inMulti);
     document.getElementById('btn-net-leave')?.classList.toggle('hidden', !inMulti);
+    document.getElementById('btn-multi-start')?.classList.toggle('hidden', !isHost);
     const pill = document.getElementById('hud-net');
     if (pill) {
       pill.classList.toggle('hidden', !inMulti);
@@ -935,7 +963,7 @@ export class Game {
       this.setNetStatus(this.net.hasPeer
         ? '🟢 Partenaire connecté — coop !'
         : (this.multi.role === 'host'
-          ? '🟡 Salon ouvert — reste sur cette page, ton partenaire arrive tout seul (aucune acceptation à faire, il entre juste le code).'
+          ? '🟡 Salon ouvert — copie le code 📋 et envoie-le à ton partenaire, puis clique ▶ Démarrer (ou ça démarrera tout seul à son arrivée).'
           : '🟡 Connexion à l\'hôte... (aucune acceptation requise côté hôte, ça se fait tout seul)'));
     }
   }
