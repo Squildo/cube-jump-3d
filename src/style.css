@@ -64,12 +64,14 @@ kbd { background: #222; color: #fff; border-radius: 6px; padding: 2px 8px; font-
 .multi-row .ghost-btn { margin-top: 0; flex: 1; min-width: 120px; white-space: nowrap; }
 #multi-status { min-height: 18px; word-break: break-word; }
 #hud-net { border-color: rgba(96,165,250,.6); }
-/* QR multijoueur */
-.qr-canvas { display: block; width: 220px; height: 220px; margin: 6px auto; background: #fff;
-  border: 4px solid #fff; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.2); image-rendering: pixelated; }
-.qr-video { display: block; width: 100%; max-height: 260px; border-radius: 12px; background: #000; margin: 6px 0; }
-.qr-text { width: 100%; min-height: 40px; max-height: 80px; font-family: monospace; font-size: 10px;
-  border: 2px solid #93c5fd; border-radius: 10px; padding: 6px; margin-bottom: 6px; word-break: break-all; resize: vertical; }
+/* Code invitation PeerJS */
+.host-code-badge { display: block; text-align: center; font-family: monospace; font-size: 32px; font-weight: 900;
+  letter-spacing: 8px; background: #fff; border: 3px dashed #2563eb; border-radius: 14px; padding: 14px 10px; margin: 8px 0;
+  color: #1e40af; box-shadow: 0 2px 10px rgba(37,99,235,.15); user-select: all; }
+#join-code-input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+#host-link-preview { word-break: break-all; font-size: 11px; color: #2563eb; }
+/* QR archivé — styles conservés pour backup mais non utilisés */
+/* .qr-canvas, .qr-video, .qr-text voir src/game/qrBackup.js */
 
 /* Admin gate (menu) */
 .admin-gate-box { background: #fef9e7; border: 2px dashed #fbbf24; border-radius: 14px; padding: 12px; margin-top: 14px; }

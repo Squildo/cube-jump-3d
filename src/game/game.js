@@ -11,7 +11,6 @@ import { Editor } from './editor.js';
 import { EditorPanel } from './editorpanel.js';
 import { validate, loadCustomSlots, saveCustomSlot, blankLevel, loadProgressSlots, saveProgressSlot, clearProgressSlot, isAdminUnlocked, setAdminUnlocked, checkAdminCode, isEditorUnlocked, setEditorUnlocked, WORLDS, getWorldLevel, getWorldTheme } from './leveldata.js';
 import { Netplay } from './netplay.js';
-import { drawQR, scanQR, QR_OFFER_PREFIX, QR_ANSWER_PREFIX } from './qr.js';
 
 export class Game {
   constructor(canvas) {
@@ -58,12 +57,10 @@ export class Game {
     this.activeSlot = null; // 0..2
     this._progressSaveT = null;
     this._progressT = 0;
-    // ----- MULTIJOUEUR (P2P, coop) -----
+    // ----- MULTIJOUEUR (P2P PeerJS, coop) -----
     this.net = new Netplay(this);
     this.multi = null; // {role:'host'|'guest', code}
     this.remotePlayer = null;
-    this._scanCleanup = null;
-    this._scanToken = 0;
     this._posT = 0; this._stateT = 0; this._goalSendT = 0;
     this._goalReady = { host: false, guest: false };
     this._goalToastDone = false;
@@ -79,6 +76,7 @@ export class Game {
     window.game = this; // console : game.setLives(10), game.setFly(true)...
     this._resize(); window.addEventListener('resize', () => this._resize());
     this.refreshAdminGateUI();
+    this._checkUrlJoin();
     // affiche sélection de sauvegarde au démarrage (Mario Galaxy)
     setTimeout(() => { this.refreshAdminGateUI(); this.showSaveSelect(); }, 100);
     this._loop = this._loop.bind(this);
@@ -99,21 +97,22 @@ export class Game {
     click('btn-quit-win', () => this.toMenu());
     click('btn-pause', () => this.pause());
     click('btn-editor', () => this.toggleEditor());
-    click('btn-qr-host', () => this.hostQR());
-    click('btn-qr-join', () => this.guestScan());
-    click('btn-qr-scan-answer', () => this.hostScan());
-    click('btn-qr-stopscan', () => this.stopScanUI());
+    click('btn-host-create', () => this.hostCreate());
+    click('btn-join', () => this.joinWithCode());
+    click('btn-copy-code', () => this.copyHostCode());
+    click('btn-copy-link', () => this.copyHostLink());
     click('btn-multi-start', () => this.hostStartGame());
     click('btn-multi-leave', () => this.leaveMulti());
     click('btn-net-leave', () => this.leaveMulti());
-    const copyText = (id, okMsg) => {
-      const el = document.getElementById(id);
-      if (!el?.value) { this.toast('Rien à copier pour l\'instant'); return; }
-      el.select();
-      navigator.clipboard?.writeText(el.value).then(() => this.toast(okMsg)).catch(() => this.toast('Sélectionné — fais Ctrl+C'));
-    };
-    $('btn-qr-copy')?.addEventListener('click', () => copyText('qr-host-text', '📋 Texte QR copié !'));
-    $('btn-qr-answer-copy')?.addEventListener('click', () => copyText('qr-answer-text', '📋 Réponse copiée !'));
+    $('join-code-input')?.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter') { e.preventDefault(); this.joinWithCode(); }
+      // auto-uppercase
+      setTimeout(() => { const el = $('join-code-input'); if (el) el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); }, 0);
+    });
+    $('join-code-input')?.addEventListener('input', () => {
+      const el = $('join-code-input');
+      if (el) el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    });
     click('btn-change-save', () => this.showSaveSelect());
     click('btn-world-back', () => { this.state='menu'; this._show('menu'); });
     click('btn-level-back', () => this.showWorldSelect());
@@ -608,6 +607,7 @@ export class Game {
       this.audio.win();
       this.tryUnlockEditorByProgress();
     });
+    net.on('full', () => { this.toast('🔒 Salon complet (2/2)'); this.setNetStatus('🔒 Salon complet (2/2) — l\'hôte a déjà un partenaire'); });
     net.on('bye', (_d, peerId) => this.onPeerLeft(peerId));
     net.on('peerJoin', (_d, peerId) => this.onPeerJoined(peerId));
     net.on('peerLeave', (_d, peerId) => this.onPeerLeft(peerId));
@@ -662,16 +662,16 @@ export class Game {
     this.remotePlayer = null;
   }
 
-  // ----- SALON QR (aucun code à taper, aucun relais réseau) -----
-  // Hôte : hostQR() affiche son QR. Invité : guestScan() scanne le QR hôte
-  // puis affiche sa réponse en QR. Hôte : hostScan() scanne la réponse.
+  // ----- SALON CODE PeerJS (P2P, 2 joueurs max) -----
   _lobbyGuard() {
     if (this.multi) { this.toast('Déjà en partie (🚪 pour quitter)'); return true; }
     if (this.state === 'editing' || this.playtesting) { this.toast('Quitte l\'éditeur d\'abord'); return true; }
     return false;
   }
-  _startManualGame() {
+  _startCoopGame() {
     this._goalReady = { host: false, guest: false };
+    this._goalToastDone = false;
+    this._sentCoins = new Set();
     this.score = 0; this.lives = 3; this.time = 0;
     this._loadLevel(0);
     this.state = 'playing'; this._show(null);
@@ -679,96 +679,88 @@ export class Game {
     this.refreshNetUI();
     this.last = performance.now();
   }
-  async hostQR() { // HÔTE : génère l'offre et l'affiche en QR
-    if (this._lobbyGuard()) return;
-    this.setNetStatus('⏳ Génération du QR (rassemblement réseau local)...');
+  _checkUrlJoin() {
     try {
-      const offer = await this.net.manualHost();
-      await drawQR(document.getElementById('qr-host'), QR_OFFER_PREFIX + offer);
-      document.getElementById('qr-host-text').value = QR_OFFER_PREFIX + offer;
-      this.multi = { role: 'host', code: 'QR' };
-      // Reste au menu : le QR reste visible pour le montrer à l'invité.
-      // Démarrage via ▶ Démarrer, ou auto quand l'invité se connecte.
+      const code = new URLSearchParams(location.search).get('join');
+      if (code) {
+        const el = document.getElementById('join-code-input');
+        if (el) el.value = code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+        // petit highlight
+        this.setNetStatus('🔗 Lien d\'invitation détecté — clique 🚀 Rejoindre');
+      }
+    } catch {}
+  }
+  _updateHostLinkUI(code) {
+    const link = `${location.origin}${location.pathname}?join=${code}`;
+    const preview = document.getElementById('host-link-preview');
+    if (preview) preview.textContent = link;
+    try { history.replaceState(null, '', `?join=${code}`); } catch {}
+  }
+  async hostCreate() {
+    if (this._lobbyGuard()) return;
+    this.setNetStatus('⏳ Création du salon (signalisation PeerJS)...');
+    try {
+      const code = await this.net.hostCreate();
+      this.multi = { role: 'host', code };
+      document.getElementById('host-code').textContent = code;
+      document.getElementById('guest-target')?.textContent !== undefined && (document.getElementById('guest-target').textContent = code);
+      this._updateHostLinkUI(code);
+      // reste au menu pour partager le code
       this.state = 'menu'; this._show('menu');
       document.getElementById('hud')?.classList.add('hidden');
       this.refreshNetUI();
-      this.setNetStatus('📱 Montre ce QR à l\'invité, puis 📷 scanne sa réponse ci-dessous.');
-      this.toast('📱 QR affiché — montre-le !');
+      const turnHint = new URLSearchParams(location.search).has('turn') ? ' (TURN actif)' : '';
+      this.setNetStatus(`✅ Code créé : ${code}${turnHint} — partage-le à J2 ! En attente...`);
+      this.toast(`🎮 Code : ${code} — partage-le !`);
     } catch (e) {
-      console.warn('[net] hostQR', e);
-      this.setNetStatus('❌ ' + (e.message || 'Échec WebRTC dans ce navigateur'));
-      this.toast('❌ ' + (e.message || 'WebRTC indisponible ici'));
+      console.warn('[net] hostCreate', e);
+      this.setNetStatus('❌ ' + (e.message || 'Échec signalisation'));
+      this.toast('❌ ' + (e.message || 'Impossible de créer le salon'));
     }
   }
-  async guestScan() { // INVITÉ : scanne le QR hôte, affiche sa réponse en QR
+  async joinWithCode() {
     if (this._lobbyGuard()) return;
-    this.setNetStatus('📷 Pointe la caméra vers le QR de l\'hôte...');
+    const input = document.getElementById('join-code-input');
+    const raw = (input?.value || '').trim();
+    if (!raw) { this.toast('⌨️ Entre le code 6 caractères'); input?.focus(); return; }
+    this.setNetStatus('⏳ Connexion à ' + raw.toUpperCase() + '...');
+    const badge = document.getElementById('guest-target');
+    if (badge) badge.textContent = raw.toUpperCase();
     try {
-      const raw = await this._scanOnce('guest');
-      const answer = await this.net.manualAnswer(raw);
-      await drawQR(document.getElementById('qr-answer'), QR_ANSWER_PREFIX + answer);
-      document.getElementById('qr-answer-text').value = QR_ANSWER_PREFIX + answer;
-      this.multi = { role: 'guest', code: 'QR' };
+      await this.net.join(raw);
+      const code = this.net.code || raw.toUpperCase().replace(/^CJ-/, '');
+      this.multi = { role: 'guest', code };
       this.ensureRemotePlayer();
-      this._startManualGame();
+      this._startCoopGame();
+      // hello déjà envoyé via onPeerJoined, mais on force
+      this.net.send('hello', {});
       this.refreshNetUI();
-      this.setNetStatus('📱 Montre ce QR-réponse à l\'hôte pour qu\'il le scanne. La partie démarre à la connexion.');
-      this.toast('✅ QR scanné — montre ta réponse !');
+      this.setNetStatus('🟢 Connecté ! Partie lancée.');
+      this.toast('🟢 Connecté à ' + code + ' !');
     } catch (e) {
-      console.warn('[net] guestScan', e);
-      this.setNetStatus('❌ ' + (e.message || 'Scan impossible'));
-      this.toast('❌ ' + (e.message || 'Scan impossible'));
-    }
-  }
-  async hostScan() { // HÔTE : scanne le QR-réponse de l'invité -> connecté
-    if (!this.multi || this.multi.role !== 'host' || !this.net.manual) {
-      this.toast('Affiche d\'abord ton QR avec 📱 Héberger');
-      return;
-    }
-    this.setNetStatus('📷 Pointe la caméra vers le QR-réponse de l\'invité...');
-    try {
-      const raw = await this._scanOnce('host');
-      await this.net.manualConnect(raw);
-      this.setNetStatus('⏳ Connexion directe en cours...');
-      this.toast('⏳ Connexion...');
-    } catch (e) {
-      console.warn('[net] hostScan', e);
-      this.setNetStatus('❌ ' + (e.message || 'Scan impossible'));
-      this.toast('❌ ' + (e.message || 'Scan impossible'));
-    }
-  }
-  // Ouvre la caméra partagée, scanne un QR et valide son préfixe.
-  // Retourne le contenu brut ; coupe la caméra dans tous les cas.
-  async _scanOnce(expectRole) {
-    const video = document.getElementById('qr-video');
-    document.getElementById('btn-qr-stopscan')?.classList.remove('hidden');
-    this._scanToken = (this._scanToken || 0) + 1;
-    const token = this._scanToken;
-    const cleanup = () => {
-      if (this._scanToken !== token) return;
-      document.getElementById('qr-video')?.classList.add('hidden');
-      document.getElementById('btn-qr-stopscan')?.classList.add('hidden');
-    };
-    this._scanCleanup = cleanup;
-    try {
-      const { value } = await scanQR(video);
-      if (this._scanToken !== token) throw new Error('Scan annulé');
-      const want = expectRole === 'host' ? QR_ANSWER_PREFIX : QR_OFFER_PREFIX;
-      const got = String(value || '').trim();
-      if (!got.startsWith(want)) {
-        throw new Error(expectRole === 'host'
-          ? 'Ce n\'est pas un QR-réponse (attendu : celui affiché chez l\'invité)'
-          : 'Ce n\'est pas un QR d\'hôte (attendu : celui affiché chez l\'hôte)');
+      console.warn('[net] join', e);
+      const msg = e.message || 'Connexion échouée';
+      if (msg.includes('complet')) {
+        this.setNetStatus('🔒 ' + msg);
+        this.toast('🔒 Salon complet (2/2)');
+      } else {
+        this.setNetStatus('❌ ' + msg);
+        this.toast('❌ ' + msg);
       }
-      return got;
-    } finally {
-      cleanup();
     }
   }
-  stopScanUI() { // referme la caméra (bouton ⏹ ou changement d'écran)
-    this._scanToken = (this._scanToken || 0) + 1;
-    try { this._scanCleanup?.(); } catch { /* ignore */ }
-    this._scanCleanup = null;
+  copyHostCode() {
+    const code = this.multi?.code || document.getElementById('host-code')?.textContent || '';
+    if (!code || code === '—') { this.toast('Aucun code à copier'); return; }
+    navigator.clipboard?.writeText(code).then(() => this.toast('📋 Code copié : ' + code)).catch(() => {
+      const el = document.getElementById('host-code'); if (el) { const r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); } this.toast('Sélectionné — fais Ctrl+C');
+    });
+  }
+  copyHostLink() {
+    const code = this.multi?.code || document.getElementById('host-code')?.textContent || '';
+    if (!code || code === '—') { this.toast('Aucun lien à copier'); return; }
+    const link = `${location.origin}${location.pathname}?join=${code}`;
+    navigator.clipboard?.writeText(link).then(() => this.toast('🔗 Lien copié !')).catch(() => this.toast(link + ' — copie manuelle'));
   }
   hostStartGame() { // l'hôte lance (ou relance) la partie coop, l'invité est resynchronisé
     if (!this.multi || this.multi.role !== 'host') return;
@@ -788,11 +780,13 @@ export class Game {
   leaveMulti(silent = false) {
     if (!this.multi) return;
     this.net.leave();
-    this.stopScanUI();
     this.removeRemotePlayer();
+    const wasHost = this.multi.role === 'host';
     this.multi = null;
     this._goalReady = { host: false, guest: false };
+    this._goalToastDone = false;
     this.player.body.material.color.setHex(0xFF6B6B);
+    try { history.replaceState(null, '', location.pathname); } catch {}
     this.refreshNetUI();
     if (!silent) {
       this.toast('🚪 Salon quitté');
@@ -922,17 +916,33 @@ export class Game {
       if (inMulti) {
         const peer = this.net.hasPeer ? '🟢' : '🟡';
         const who = this.multi.role === 'host' ? 'Hôte' : 'Invité';
-        pill.textContent = `🌐 QR • ${who} ${peer}`;
+        const code = this.multi.code || this.net.code || '?';
+        pill.textContent = `🌐 ${code} • ${who} ${peer}`;
       }
     }
     if (inMulti) {
       const role = document.getElementById('multi-role');
-      if (role) role.textContent = isHost ? '👑 Tu es l\'hôte' : '🤝 Tu es invité(e)';
-      this.setNetStatus(this.net.hasPeer
-        ? '🟢 Partenaire connecté — coop !'
-        : (isHost
-          ? '🟡 Montre ton QR à l\'invité, puis scanne sa réponse.'
-          : '🟡 En attente de l\'hôte...'));
+      if (role) role.textContent = isHost ? `👑 Tu es l'hôte — Code ${this.multi.code}` : `🤝 Invité — Salon ${this.multi.code}`;
+      const codeDisp = document.getElementById('multi-code-display');
+      if (codeDisp) codeDisp.textContent = `Code : ${this.multi.code}`;
+      // maj host-code si besoin
+      const hc = document.getElementById('host-code');
+      if (hc && isHost && this.multi.code) hc.textContent = this.multi.code;
+      const gt = document.getElementById('guest-target');
+      if (gt && isGuest) gt.textContent = this.multi.code;
+      if (this.net.hasPeer) this.setNetStatus('🟢 Partenaire connecté — coop !');
+      else if (isHost) {
+        const turnHint = new URLSearchParams(location.search).has('turn') ? ' (TURN actif)' : '';
+        this.setNetStatus(`🟡 En attente de J2... Partage le code ${this.multi.code}${turnHint} ou le lien ?join=${this.multi.code}`);
+      } else {
+        this.setNetStatus('🟡 Connecté au salon — synchronisation...');
+      }
+    } else {
+      // pré-remplir join input si ?join= présent
+      try {
+        const j = new URLSearchParams(location.search).get('join');
+        if (j) { const el=document.getElementById('join-code-input'); if(el && !el.value) el.value=j.toUpperCase().slice(0,6); }
+      } catch {}
     }
   }
 

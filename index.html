@@ -9,7 +9,8 @@
   {
     "imports": {
       "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "peerjs": "https://esm.sh/peerjs@1.5.4"
     }
   }
   </script>
@@ -80,39 +81,34 @@
       <button id="btn-play" class="big-btn">▶ JOUER</button>
       <button id="btn-change-save" class="ghost-btn">💾 Changer de session</button>
       <div class="multi-box">
-        <div class="multi-title">🌐 MULTIJOUEUR COOP (QR, sans serveur)</div>
+        <div class="multi-title">🌐 MULTIJOUEUR COOP — Code d'invitation (P2P PeerJS)</div>
         <div id="multi-offline">
-          <div class="multi-row">
-            <button id="btn-qr-host" class="ghost-btn">📱 Héberger (mon QR)</button>
-            <button id="btn-qr-join" class="ghost-btn">📷 Rejoindre (scanner)</button>
+          <div class="multi-row" style="flex-direction:column; align-items:stretch;">
+            <button id="btn-host-create" class="ghost-btn" style="background:linear-gradient(180deg,#60a5fa,#2563eb); color:#fff; border-color:#2563eb; font-size:16px;">🎮 Héberger — Créer un code</button>
+            <div class="multi-row" style="margin-top:8px; margin-bottom:0;">
+              <input id="join-code-input" maxlength="6" placeholder="CODE 6 caractères (ex: X7K9PQ)" autocomplete="off" style="flex:1; min-width:140px; text-transform:uppercase; letter-spacing:2px; font-weight:800; text-align:center; border:2px solid #93c5fd; border-radius:12px; padding:10px; font-size:16px;" />
+              <button id="btn-join" class="ghost-btn" style="flex:0 0 auto; min-width:120px; background:#22c55e; color:#fff; border-color:#16a34a;">🚀 Rejoindre</button>
+            </div>
           </div>
-          <p class="hint">2 appareils, appareils photo : l'invité scanne le QR de l'hôte, l'hôte scanne la réponse. Aucun relais, même WiFi idéal.</p>
+          <p class="hint">Héberger → tu obtiens un code à partager. Rejoindre → colle le code de l'hôte. Lien direct : <code>?join=CODE</code> pré-remplit le champ. 2 joueurs max.</p>
+          <p class="hint" style="font-size:11px; color:#6b7280;">Test NAT : ajoute <code>?turn=1</code> à l'URL pour activer le relais TURN (2ème config à comparer).</p>
         </div>
         <div id="multi-host-panel" class="hidden">
-          <p class="hint">Montre ce QR à l'invité avec ton écran :</p>
-          <canvas id="qr-host" class="qr-canvas"></canvas>
+          <p class="hint" style="font-weight:700; color:#1e40af;">Ton code d'invitation :</p>
+          <div id="host-code" class="host-code-badge">—</div>
           <div class="multi-row">
-            <button id="btn-qr-copy" class="ghost-btn" title="Copier le texte (secours)">📋 Copier le texte</button>
+            <button id="btn-copy-code" class="ghost-btn">📋 Copier le code</button>
+            <button id="btn-copy-link" class="ghost-btn">🔗 Copier le lien</button>
           </div>
-          <textarea id="qr-host-text" readonly class="qr-text" placeholder="Texte du QR (secours)..."></textarea>
-          <div class="multi-row">
-            <button id="btn-qr-scan-answer" class="ghost-btn">📷 Scanner la réponse</button>
-          </div>
+          <p id="host-wait" class="hint">⏳ En attente de J2... Partage le code ou le lien.</p>
+          <p class="hint" style="font-size:11px; color:#6b7280;">Le lien est du type <code id="host-link-preview">—</code></p>
         </div>
         <div id="multi-guest-panel" class="hidden">
-          <p class="hint">Montre ce QR-réponse à l'hôte avec ton écran :</p>
-          <canvas id="qr-answer" class="qr-canvas"></canvas>
-          <div class="multi-row">
-            <button id="btn-qr-answer-copy" class="ghost-btn" title="Copier le texte (secours)">📋 Copier le texte</button>
-          </div>
-          <textarea id="qr-answer-text" readonly class="qr-text" placeholder="Texte de la réponse (secours)..."></textarea>
-        </div>
-        <video id="qr-video" class="qr-video hidden" playsinline muted></video>
-        <div class="multi-row">
-          <button id="btn-qr-stopscan" class="ghost-btn hidden">⏹ Arrêter la caméra</button>
+          <p class="hint">🔗 Connexion à <strong id="guest-target">—</strong> en cours...</p>
         </div>
         <div id="multi-online" class="hidden">
           <div id="multi-role" class="hint"></div>
+          <div id="multi-code-display" class="hint" style="font-weight:700; letter-spacing:1px;"></div>
           <button id="btn-multi-start" class="big-btn hidden">▶ Démarrer la partie</button>
           <button id="btn-multi-leave" class="ghost-btn">🚪 Quitter le salon</button>
         </div>
