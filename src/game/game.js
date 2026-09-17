@@ -41,7 +41,8 @@ export class Game {
     this.audio = new GameAudio();
     this.fx = new Effects(this.scene);
 
-    this.state = 'menu'; // menu | playing | paused | over | win | world-select | level-select
+    this.state = 'mode-select'; // mode-select | saves | menu | playing | paused | over | win | world-select | level-select | multi-lobby
+    this.gameMode = null; // 'solo' | 'multi'
     this.score = 0; this.coinsTaken = 0; this.totalCoins = 0;
     this.lives = 3; this.level = 0; this.maxLevels = 6; this.levelsPerWorld = 3; this.worldCount = 2;
     this.worldIdx = 1; this.levelIdx = 0;
@@ -77,8 +78,8 @@ export class Game {
     this._resize(); window.addEventListener('resize', () => this._resize());
     this.refreshAdminGateUI();
     this._checkUrlJoin();
-    // affiche sélection de sauvegarde au démarrage (Mario Galaxy)
-    setTimeout(() => { this.refreshAdminGateUI(); this.showSaveSelect(); }, 100);
+    // premier écran : choix du mode Solo / Multi
+    setTimeout(() => { this.refreshAdminGateUI(); this.showModeSelect(); }, 100);
     this._loop = this._loop.bind(this);
     this.last = performance.now();
     requestAnimationFrame(this._loop);
@@ -113,17 +114,25 @@ export class Game {
       const el = $('join-code-input');
       if (el) el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     });
-    click('btn-change-save', () => this.showSaveSelect());
-    click('btn-world-back', () => { this.state='menu'; this._show('menu'); });
+    click('btn-change-save', () => this.showSaveSelectFromMenu());
+    click('btn-menu-back', () => this.showModeSelect());
+    click('btn-save-back', () => this.showModeSelect());
+    click('btn-multi-back', () => this.showModeSelect());
+    click('btn-mode-solo', () => this.selectSolo());
+    click('btn-mode-multi', () => this.selectMulti());
+    click('btn-world-back', () => { if(this.gameMode==='solo'){ this.state='menu'; this._show('menu'); } else this.showModeSelect(); });
     click('btn-level-back', () => this.showWorldSelect());
-    // admin gate
-    $('btn-admin-unlock')?.addEventListener('click', () => this.unlockAdmin());
+    // admin gate (solo + mode-select)
+    const bindAdminGate = (inputId, btnId) => {
+      $(btnId)?.addEventListener('click', () => this.unlockAdmin(inputId));
+      $(inputId)?.addEventListener('keydown', e => {
+        if (e.code === 'Enter') { e.preventDefault(); this.unlockAdmin(inputId); }
+        e.stopPropagation();
+      });
+    };
+    bindAdminGate('admin-code-input', 'btn-admin-unlock');
+    bindAdminGate('admin-code-input-mode', 'btn-admin-unlock-mode');
     $('btn-admin-lock')?.addEventListener('click', () => this.lockAdmin());
-    const adminInput = $('admin-code-input');
-    adminInput?.addEventListener('keydown', e => {
-      if (e.code === 'Enter') { e.preventDefault(); this.unlockAdmin(); }
-      e.stopPropagation();
-    });
     // bloque F2/F3 si verrouillé (sera aussi géré dans AdminPanel/Editor)
     $('btn-editor-close')?.addEventListener('click', () => this.exitEditor());
     $('btn-sound')?.addEventListener('click', e => {
@@ -152,7 +161,7 @@ export class Game {
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
   }
 
-  _show(id) { ['menu', 'pause', 'gameover', 'win', 'save-select', 'world-select', 'level-select'].forEach(m => document.getElementById(m)?.classList.add('hidden')); if (id) document.getElementById(id)?.classList.remove('hidden'); }
+  _show(id) { ['menu', 'pause', 'gameover', 'win', 'save-select', 'world-select', 'level-select', 'mode-select', 'multi-lobby'].forEach(m => document.getElementById(m)?.classList.add('hidden')); if (id) document.getElementById(id)?.classList.remove('hidden'); }
   toast(msg) {
     const t = document.getElementById('toast');
     t.textContent = msg; t.classList.add('show');
@@ -182,8 +191,34 @@ export class Game {
     txt.style.color = ratio >= 1 ? '#4ade80' : '#f87171';
   }
 
-  // ----- SAUVEGARDES (Mario Galaxy) -----
+  // ----- MODES -----
+  showModeSelect() {
+    if (this.multi) this.leaveMulti(true);
+    this.gameMode = null;
+    this.state = 'mode-select';
+    this._show('mode-select');
+    document.getElementById('hud')?.classList.add('hidden');
+    this.refreshAdminGateUI();
+  }
+  selectSolo() {
+    this.gameMode = 'solo';
+    this.showSaveSelect();
+  }
+  selectMulti() {
+    this.gameMode = 'multi';
+    this.state = 'multi-lobby';
+    this._show('multi-lobby');
+    document.getElementById('hud')?.classList.add('hidden');
+    this.refreshNetUI();
+    this.refreshAdminGateUI();
+  }
+  showSaveSelectFromMenu() {
+    // Depuis le menu solo : retour aux sessions sans repasser par mode-select
+    this.showSaveSelect();
+  }
+  // ----- SAUVEGARDES (Mario Galaxy) — uniquement Solo -----
   showSaveSelect() {
+    this.gameMode = 'solo';
     this.state = 'saves';
     this._show('save-select');
     document.getElementById('hud')?.classList.add('hidden');
@@ -193,7 +228,13 @@ export class Game {
     document.getElementById('save-select')?.classList.add('hidden');
   }
   showWorldSelect() {
+    if (this.gameMode !== 'solo' && this.gameMode !== null) {
+      this.toast('🌐 Monde solo uniquement — repasse en Solo');
+      this.showModeSelect();
+      return;
+    }
     if (this.activeSlot == null) { this.showSaveSelect(); return; }
+    this.gameMode = 'solo';
     this.state = 'world-select';
     this._show('world-select');
     this.renderWorldSelect();
@@ -352,34 +393,57 @@ export class Game {
   refreshAdminGateUI() {
     const adminUnlocked = isAdminUnlocked();
     const editorUnlocked = isEditorUnlocked();
+    // gate dans menu solo
     document.getElementById('admin-gate-locked')?.classList.toggle('hidden', adminUnlocked);
     document.getElementById('admin-gate-unlocked')?.classList.toggle('hidden', !adminUnlocked);
+    // gate dans mode-select
+    document.getElementById('admin-gate-locked-mode')?.classList.toggle('hidden', adminUnlocked);
+    document.getElementById('admin-gate-unlocked-mode')?.classList.toggle('hidden', !adminUnlocked);
     document.getElementById('btn-admin')?.classList.toggle('locked', !adminUnlocked);
-    document.getElementById('btn-editor')?.classList.toggle('locked', !editorUnlocked);
+    // éditeur : en multi, seulement si admin
+    const editorEffectiveUnlocked = this.multi ? adminUnlocked : editorUnlocked;
+    document.getElementById('btn-editor')?.classList.toggle('locked', !editorEffectiveUnlocked);
     const hint = document.getElementById('editor-lock-hint');
     if (hint) {
-      if (editorUnlocked) hint.textContent = adminUnlocked ? '✅ Éditeur disponible (admin)' : '✅ Éditeur débloqué — 3 niveaux terminés !';
-      else hint.textContent = '🔒 Éditeur verrouillé — termine les 3 niveaux pour le débloquer (ou déverrouille l\'admin)';
+      if (this.multi) {
+        hint.textContent = adminUnlocked ? '✅ Éditeur disponible (admin en multi)' : '🔒 Éditeur en multi : uniquement en mode admin';
+      } else {
+        if (editorUnlocked) hint.textContent = adminUnlocked ? '✅ Éditeur disponible (admin)' : '✅ Éditeur débloqué — 3 niveaux terminés !';
+        else hint.textContent = '🔒 Éditeur verrouillé — termine les 3 niveaux pour le débloquer (ou déverrouille l\'admin)';
+      }
+    }
+    const hintMulti = document.getElementById('editor-lock-hint-multi');
+    if (hintMulti) {
+      hintMulti.textContent = adminUnlocked ? '✅ Éditeur disponible (admin)' : '🔒 Éditeur en multi : déverrouille l\'admin pour y accéder';
     }
     const adminBtn = document.getElementById('btn-admin');
     if (adminBtn) adminBtn.title = adminUnlocked ? 'Panneau admin (F2)' : '🔒 Admin verrouillé — entre le code';
     const editorBtn = document.getElementById('btn-editor');
-    if (editorBtn) editorBtn.title = editorUnlocked ? 'Éditeur de niveau (F3)' : '🔒 Éditeur verrouillé — finis les 3 niveaux';
+    if (editorBtn) editorBtn.title = editorEffectiveUnlocked ? 'Éditeur de niveau (F3)' : (this.multi ? '🔒 Éditeur en multi : admin requis' : '🔒 Éditeur verrouillé — finis les 3 niveaux');
     const status = document.getElementById('admin-unlock-status');
     if (status && !adminUnlocked) status.textContent = '';
+    const statusMode = document.getElementById('admin-unlock-status-mode');
+    if (statusMode && !adminUnlocked) statusMode.textContent = '';
   }
-  unlockAdmin() {
-    const input = document.getElementById('admin-code-input');
+  unlockAdmin(inputId = 'admin-code-input') {
+    const input = document.getElementById(inputId);
     const code = (input?.value || '').trim();
-    const status = document.getElementById('admin-unlock-status');
+    const isModeInput = inputId.includes('mode');
+    const status = document.getElementById(isModeInput ? 'admin-unlock-status-mode' : 'admin-unlock-status');
+    const otherStatus = document.getElementById(isModeInput ? 'admin-unlock-status' : 'admin-unlock-status-mode');
     if (!code) { if (status) status.textContent = '⌨️ Entre un code'; return; }
     if (checkAdminCode(code)) {
       setAdminUnlocked(true);
       setEditorUnlocked(true);
       this.refreshAdminGateUI();
       if (status) status.textContent = '✅ Code correct — admin déverrouillé !';
+      if (otherStatus) otherStatus.textContent = '✅ Code correct — admin déverrouillé !';
       this.toast('🔓 Admin déverrouillé !');
-      if (input) input.value = '';
+      // clear both inputs
+      const a = document.getElementById('admin-code-input');
+      const b = document.getElementById('admin-code-input-mode');
+      if (a) a.value = '';
+      if (b) b.value = '';
     } else {
       if (status) status.textContent = '❌ Code incorrect';
       this.toast('❌ Code admin incorrect');
@@ -396,7 +460,10 @@ export class Game {
     document.getElementById('editor-panel')?.classList.add('hidden');
     this.toast('🔒 Admin reverrouillé');
   }
-  isEditorAvailable() { return isEditorUnlocked(); }
+  isEditorAvailable() {
+    if (this.multi) return isAdminUnlocked(); // en multi, seulement admin
+    return isEditorUnlocked();
+  }
   tryUnlockEditorByProgress() {
     if (isEditorUnlocked()) return;
     // débloque après victoire complète (3 niveaux)
@@ -406,10 +473,30 @@ export class Game {
     this.toast('🧱 Éditeur débloqué ! Tu as terminé les 3 niveaux !');
   }
 
-  toMenu() { this.state = 'menu'; this.playtesting = false; if (this.multi) this.leaveMulti(true); this._show('menu'); document.getElementById('hud')?.classList.add('hidden'); this.hideSaveSelect(); this.saveProgress(); }
+  toMenu() {
+    this.playtesting = false;
+    const wasMulti = !!this.multi;
+    if (this.multi) this.leaveMulti(true);
+    document.getElementById('hud')?.classList.add('hidden');
+    this.hideSaveSelect();
+    this.saveProgress();
+    if (wasMulti || this.gameMode === 'multi') {
+      this.showModeSelect();
+    } else {
+      this.state = 'menu';
+      this._show('menu');
+    }
+  }
   start() {
+    // En multi, le bouton JOUER solo n'est pas affiché : redirige vers le lobby
+    if (this.gameMode === 'multi' || this.multi) {
+      if (this.multi) { this.multiRestart(); return; }
+      this.toast('🌐 Passe par le lobby multijoueur');
+      this.selectMulti();
+      return;
+    }
     if (this.activeSlot == null) { this.showSaveSelect(); this.toast('💾 Choisis une session d\'abord'); return; }
-    // Rejouer en multi (game over / victoire) = restart synchronisé
+    // Rejouer en multi (game over / victoire) = restart synchronisé — ne devrait pas arriver en solo
     if (this.multi) { this.multiRestart(); return; }
     // Rejouer pendant un playtest = relance le niveau édité, pas le niveau 1 officiel
     if (this.playtesting && this._playtestData) {
@@ -695,8 +782,19 @@ export class Game {
       if (code) {
         const el = document.getElementById('join-code-input');
         if (el) el.value = code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-        // petit highlight
         this.setNetStatus('🔗 Lien d\'invitation détecté — clique 🚀 Rejoindre');
+        // auto-passe en mode multi si lien détecté au boot
+        if (!this.gameMode) {
+          setTimeout(() => {
+            if (!this.multi) {
+              this.gameMode = 'multi';
+              this.state = 'multi-lobby';
+              this._show('multi-lobby');
+              this.refreshNetUI();
+              this.setNetStatus('🔗 Code pré-rempli — clique 🚀 Rejoindre');
+            }
+          }, 250);
+        }
       }
     } catch {}
   }
@@ -708,6 +806,7 @@ export class Game {
   }
   async hostCreate() {
     if (this._lobbyGuard()) return;
+    this.gameMode = 'multi';
     this.setNetStatus('⏳ Création du salon (signalisation PeerJS)...');
     try {
       const code = await this.net.hostCreate();
@@ -715,8 +814,8 @@ export class Game {
       document.getElementById('host-code').textContent = code;
       document.getElementById('guest-target')?.textContent !== undefined && (document.getElementById('guest-target').textContent = code);
       this._updateHostLinkUI(code);
-      // reste au menu pour partager le code
-      this.state = 'menu'; this._show('menu');
+      // reste au lobby multi pour partager le code
+      this.state = 'multi-lobby'; this._show('multi-lobby');
       document.getElementById('hud')?.classList.add('hidden');
       this.refreshNetUI();
       const turnHint = new URLSearchParams(location.search).has('turn') ? ' (TURN actif)' : '';
@@ -740,9 +839,10 @@ export class Game {
       await this.net.join(raw);
       const code = this.net.code || raw.toUpperCase().replace(/^CJ-/, '');
       this.multi = { role: 'guest', code };
-      // Reste au salon, ne démarre pas la partie : seul l'hôte peut démarrer
+      this.gameMode = 'multi';
+      // Reste au lobby multi, ne démarre pas la partie : seul l'hôte peut démarrer
       // Si l'hôte est déjà en jeu, il enverra un snap et on rejoindra direct
-      this.state = 'menu'; this._show('menu');
+      this.state = 'multi-lobby'; this._show('multi-lobby');
       document.getElementById('hud')?.classList.add('hidden');
       this.refreshNetUI();
       this.setNetStatus('🟢 Connecté au salon ' + code + ' — en attente que l\'hôte démarre...');
@@ -975,14 +1075,23 @@ export class Game {
 
   // ---------- ÉDITEUR ----------
   toggleEditor() {
-    if (!this.isEditorAvailable()) { this.toast('🔒 Éditeur verrouillé — termine les 3 niveaux ou entre le code admin (🔑 dans le menu)'); this.showSaveSelect(); return; }
+    if (!this.isEditorAvailable()) {
+      if (this.multi) { this.toast('🔒 Éditeur en multi : uniquement en mode admin'); return; }
+      this.toast('🔒 Éditeur verrouillé — termine les 3 niveaux ou entre le code admin (🔑 dans le menu)');
+      this.showSaveSelect();
+      return;
+    }
     if (this.state === 'editing') this.exitEditor();
     else if (this.playtesting) this.stopPlaytest();
     else this.enterEditor();
   }
   enterEditor() {
-    if (!this.isEditorAvailable()) { this.toast('🔒 Éditeur verrouillé — termine les 3 niveaux ou unlock admin'); return; }
-    if (this.multi) { this.toast('🧱 Éditeur désactivé en multi (quitte d\'abord)'); return; }
+    if (!this.isEditorAvailable()) {
+      if (this.multi) { this.toast('🔒 Éditeur en multi : admin requis'); return; }
+      this.toast('🔒 Éditeur verrouillé — termine les 3 niveaux ou unlock admin');
+      return;
+    }
+    if (this.multi && !isAdminUnlocked()) { this.toast('🧱 Éditeur en multi : admin requis (déverrouille via 🔑)'); return; }
     if (this.state === 'editing') return;
     if (!this.world.platforms.length) this.world.buildLevel(0);
     this._preEditorState = this.state;

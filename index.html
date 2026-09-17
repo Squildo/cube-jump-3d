@@ -39,13 +39,42 @@
   <div id="toast"></div>
   <div id="hud-stamina" class="hidden"><div class="stamina-label">⚡ Double Saut</div><div class="stamina-bar"><div id="stamina-fill"></div></div><div id="stamina-text" class="stamina-text">PRÊT</div></div>
 
-  <!-- Sélection de sauvegarde (Mario Galaxy) -->
-  <div id="save-select" class="overlay">
+  <!-- Choix du mode (Solo / Multi) — premier écran -->
+  <div id="mode-select" class="overlay">
+    <div class="card">
+      <h1>🟩 CUBE JUMP 3D</h1>
+      <p class="subtitle">Choisis ton mode de jeu</p>
+      <div class="mode-choices">
+        <button id="btn-mode-solo" class="big-btn mode-btn solo"><span class="mode-icon">🎮</span> Solo — Aventure</button>
+        <p class="hint">3 sessions • 2 mondes • progression locale</p>
+        <button id="btn-mode-multi" class="big-btn mode-btn multi" style="background:linear-gradient(180deg,#60a5fa,#2563eb); box-shadow:0 6px 0 #1e40af;"><span class="mode-icon">🌐</span> Multijoueur Coop</button>
+        <p class="hint">Code 6c PeerJS • 2 joueurs max • lien ?join=</p>
+      </div>
+      <div class="admin-gate-box" style="margin-top:16px;">
+        <div class="multi-title">🔑 ACCÈS PRO</div>
+        <div id="admin-gate-locked-mode">
+          <p class="hint">Admin/Éditeur verrouillés — code requis</p>
+          <div class="multi-row">
+            <input id="admin-code-input-mode" maxlength="20" placeholder="CODE ADMIN" autocomplete="off" />
+            <button id="btn-admin-unlock-mode" class="ghost-btn">🔓 Déverrouiller</button>
+          </div>
+          <p id="admin-unlock-status-mode" class="hint"></p>
+        </div>
+        <div id="admin-gate-unlocked-mode" class="hidden">
+          <p class="hint">✅ Accès admin déverrouillé</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sélection de sauvegarde (Mario Galaxy) — uniquement en Solo -->
+  <div id="save-select" class="overlay hidden">
     <div class="card save-card">
       <h1>💾 CHOISIS TA SESSION</h1>
       <p class="subtitle">3 sauvegardes locales • comme Mario Galaxy</p>
       <div id="save-slots" class="save-slots"></div>
       <p class="hint">La progression (niveau, score, temps) est sauvée automatiquement sur l'appareil.</p>
+      <button id="btn-save-back" class="ghost-btn">⬅ Modes</button>
     </div>
   </div>
 
@@ -67,10 +96,10 @@
     </div>
   </div>
 
-  <!-- Menus -->
+  <!-- Menu Solo -->
   <div id="menu" class="overlay hidden">
     <div class="card">
-      <h1>🟩 CUBE JUMP 3D</h1>
+      <h1>🟩 CUBE JUMP 3D — Solo</h1>
       <p class="subtitle">Plateforme low-poly • Three.js</p>
       <div class="howto">
         <div><kbd>WASD</kbd> / <kbd>←↑↓→</kbd> bouger</div>
@@ -80,8 +109,34 @@
       </div>
       <button id="btn-play" class="big-btn">▶ JOUER</button>
       <button id="btn-change-save" class="ghost-btn">💾 Changer de session</button>
+      <button id="btn-menu-back" class="ghost-btn">⬅ Modes</button>
+      <div class="admin-gate-box">
+        <div class="multi-title">🔑 ACCÈS PRO</div>
+        <div id="admin-gate-locked">
+          <p class="hint" id="admin-gate-hint">Admin verrouillé — code requis pour ⚙️ • Éditeur 🧱 débloqué après 3 niveaux ou via admin</p>
+          <div class="multi-row">
+            <input id="admin-code-input" maxlength="20" placeholder="CODE ADMIN" autocomplete="off" />
+            <button id="btn-admin-unlock" class="ghost-btn">🔓 Déverrouiller</button>
+          </div>
+          <p id="admin-unlock-status" class="hint"></p>
+          <p class="hint" style="font-size:11px;color:#999;">Code par défaut : <kbd>CUBEADMIN</kbd> — modifiable dans <code>LevelData.js:ADMIN_CODE</code></p>
+        </div>
+        <div id="admin-gate-unlocked" class="hidden">
+          <p class="hint">✅ Accès admin déverrouillé</p>
+          <button id="btn-admin-lock" class="ghost-btn">🔒 Verrouiller l'admin</button>
+        </div>
+        <p id="editor-lock-hint" class="hint"></p>
+      </div>
+      <p class="hint">3 niveaux • 3 vies partagées • checkpoints verts</p>
+    </div>
+  </div>
+
+  <!-- Lobby Multijoueur -->
+  <div id="multi-lobby" class="overlay hidden">
+    <div class="card">
+      <h1>🌐 MULTIJOUEUR COOP</h1>
+      <p class="subtitle">Code d'invitation P2P PeerJS • 2 joueurs max</p>
       <div class="multi-box">
-        <div class="multi-title">🌐 MULTIJOUEUR COOP — Code d'invitation (P2P PeerJS)</div>
         <div id="multi-offline">
           <div class="multi-row" style="flex-direction:column; align-items:stretch;">
             <button id="btn-host-create" class="ghost-btn" style="background:linear-gradient(180deg,#60a5fa,#2563eb); color:#fff; border-color:#2563eb; font-size:16px;">🎮 Héberger — Créer un code</button>
@@ -115,23 +170,11 @@
         <div id="multi-status" class="hint"></div>
       </div>
       <div class="admin-gate-box">
-        <div class="multi-title">🔑 ACCÈS PRO</div>
-        <div id="admin-gate-locked">
-          <p class="hint" id="admin-gate-hint">Admin verrouillé — code requis pour ⚙️ • Éditeur 🧱 débloqué après 3 niveaux ou via admin</p>
-          <div class="multi-row">
-            <input id="admin-code-input" maxlength="20" placeholder="CODE ADMIN" autocomplete="off" />
-            <button id="btn-admin-unlock" class="ghost-btn">🔓 Déverrouiller</button>
-          </div>
-          <p id="admin-unlock-status" class="hint"></p>
-          <p class="hint" style="font-size:11px;color:#999;">Code par défaut : <kbd>CUBEADMIN</kbd> — modifiable dans <code>LevelData.js:ADMIN_CODE</code></p>
-        </div>
-        <div id="admin-gate-unlocked" class="hidden">
-          <p class="hint">✅ Accès admin déverrouillé</p>
-          <button id="btn-admin-lock" class="ghost-btn">🔒 Verrouiller l'admin</button>
-        </div>
-        <p id="editor-lock-hint" class="hint"></p>
+        <div class="multi-title">🔑 ACCÈS PRO (multi)</div>
+        <p class="hint" style="font-size:12px;">Éditeur en multi : uniquement si admin déverrouillé</p>
+        <p id="editor-lock-hint-multi" class="hint"></p>
       </div>
-      <p class="hint">3 niveaux • 3 vies partagées • checkpoints verts • drapeau à 2 obligatoire</p>
+      <button id="btn-multi-back" class="ghost-btn">⬅ Modes</button>
     </div>
   </div>
 
