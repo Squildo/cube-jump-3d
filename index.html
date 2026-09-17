@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>🕹️ Plateforme 3D — Three.js</title>
+  <link rel="stylesheet" href="/src/style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "trystero": "https://cdn.jsdelivr.net/npm/trystero@0.25.4/+esm",
+      "@trystero-p2p/mqtt": "https://cdn.jsdelivr.net/npm/@trystero-p2p/mqtt@0.25.4/+esm"
+    }
+  }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div class="hud-left">
+      <div class="hud-pill">⭐ <span id="hud-score">0</span></div>
+      <div class="hud-pill">🪙 <span id="hud-coins">0/0</span></div>
+      <div class="hud-pill">❤️ <span id="hud-lives">3</span></div>
+    </div>
+    <div class="hud-right">
+      <div class="hud-pill">⏱️ <span id="hud-time">0:00</span></div>
+      <div class="hud-pill">🚩 <span id="hud-level">Niveau 1/3</span></div>
+      <button id="btn-pause" class="hud-btn" title="Pause">⏸</button>
+      <button id="btn-sound" class="hud-btn" title="Son">🔊</button>
+      <button id="btn-admin" class="hud-btn" title="Panneau admin (F2)">⚙️</button>
+      <button id="btn-editor" class="hud-btn" title="Éditeur de niveau (F3)">🧱</button>
+      <span id="hud-net" class="hud-pill hidden">🌐</span>
+      <button id="btn-net-leave" class="hud-btn hidden" title="Quitter le salon">🚪</button>
+    </div>
+  </div>
+  <div id="toast"></div>
+  <div id="hud-stamina" class="hidden"><div class="stamina-label">⚡ Double Saut</div><div class="stamina-bar"><div id="stamina-fill"></div></div><div id="stamina-text" class="stamina-text">PRÊT</div></div>
+
+  <!-- Sélection de sauvegarde (Mario Galaxy) -->
+  <div id="save-select" class="overlay">
+    <div class="card save-card">
+      <h1>💾 CHOISIS TA SESSION</h1>
+      <p class="subtitle">3 sauvegardes locales • comme Mario Galaxy</p>
+      <div id="save-slots" class="save-slots"></div>
+      <p class="hint">La progression (niveau, score, temps) est sauvée automatiquement sur l'appareil.</p>
+    </div>
+  </div>
+
+  <!-- Sélection Monde (Mario Bros) -->
+  <div id="world-select" class="overlay hidden">
+    <div class="card" style="max-width: 640px;">
+      <h1>🌍 CHOISIS UN MONDE</h1>
+      <p class="subtitle">2 mondes • 3 niveaux chacun</p>
+      <div id="world-cards" class="world-cards"></div>
+      <button id="btn-world-back" class="ghost-btn">⬅ Retour</button>
+    </div>
+  </div>
+  <div id="level-select" class="overlay hidden">
+    <div class="card" style="max-width: 560px;">
+      <h1 id="level-select-title">🚩 NIVEAUX</h1>
+      <p class="subtitle" id="level-select-subtitle">Choisis un niveau</p>
+      <div id="level-cards" class="level-cards"></div>
+      <button id="btn-level-back" class="ghost-btn">⬅ Mondes</button>
+    </div>
+  </div>
+
+  <!-- Menus -->
+  <div id="menu" class="overlay hidden">
+    <div class="card">
+      <h1>🟩 CUBE JUMP 3D</h1>
+      <p class="subtitle">Plateforme low-poly • Three.js</p>
+      <div class="howto">
+        <div><kbd>WASD</kbd> / <kbd>←↑↓→</kbd> bouger</div>
+        <div><kbd>Espace</kbd> sauter (double-saut ! • maintien = saut auto)</div>
+        <div>📱 Joystick + bouton A sur mobile</div>
+        <div>🪙 Ramasse les pièces • 🚩 Atteins le drapeau • ⚠️ Évite les pics</div>
+      </div>
+      <button id="btn-play" class="big-btn">▶ JOUER</button>
+      <button id="btn-change-save" class="ghost-btn">💾 Changer de session</button>
+      <div class="multi-box">
+        <div class="multi-title">🌐 MULTIJOUEUR COOP (en ligne, sans serveur)</div>
+        <div id="multi-offline">
+          <div class="multi-row">
+            <button id="btn-multi-host" class="ghost-btn">🌐 Créer un salon</button>
+          </div>
+          <div class="multi-row">
+            <input id="multi-code" maxlength="8" placeholder="CODE" autocomplete="off" />
+            <button id="btn-multi-join" class="ghost-btn">🔗 Rejoindre</button>
+          </div>
+        </div>
+        <div id="multi-online" class="hidden">
+          <div class="multi-code-line">Salon : <b id="multi-code-show">-----</b>
+            <button id="btn-multi-copy" title="Copier le code">📋</button>
+          </div>
+          <div id="multi-role" class="hint"></div>
+          <button id="btn-multi-leave" class="ghost-btn">🚪 Quitter le salon</button>
+        </div>
+        <div id="multi-status" class="hint"></div>
+        <button id="btn-manual-toggle" class="ghost-btn">🛠️ Connexion manuelle (si l'auto échoue)</button>
+        <div id="multi-manual" class="hidden">
+          <p class="hint">Sans aucun relais : Hôte <b>1️⃣</b> génère et envoie son code → Invité <b>2️⃣</b> le colle et renvoie sa réponse → Hôte <b>3️⃣</b> la colle et connecte. Idéal même WiFi.</p>
+          <div class="multi-row">
+            <button id="btn-manual-offer" class="ghost-btn">1️⃣ Générer mon code (hôte)</button>
+            <button id="btn-manual-copy1" class="ghost-btn" title="Copier">📋</button>
+          </div>
+          <textarea id="manual-offer-out" readonly placeholder="Le code de l'hôte apparaîtra ici..."></textarea>
+          <div class="multi-label">Code de l'hôte → à coller chez l'invité :</div>
+          <textarea id="manual-offer-in" placeholder="Colle ici le code reçu (invité)..."></textarea>
+          <div class="multi-row">
+            <button id="btn-manual-answer" class="ghost-btn">2️⃣ Générer ma réponse (invité)</button>
+            <button id="btn-manual-copy2" class="ghost-btn" title="Copier">📋</button>
+          </div>
+          <textarea id="manual-answer-out" readonly placeholder="Ta réponse apparaîtra ici..."></textarea>
+          <div class="multi-label">Réponse de l'invité → à coller chez l'hôte :</div>
+          <textarea id="manual-answer-in" placeholder="Colle ici la réponse reçue (hôte)..."></textarea>
+          <div class="multi-row">
+            <button id="btn-manual-connect" class="ghost-btn">3️⃣ Connecter (hôte)</button>
+          </div>
+        </div>
+      </div>
+      <div class="admin-gate-box">
+        <div class="multi-title">🔑 ACCÈS PRO</div>
+        <div id="admin-gate-locked">
+          <p class="hint" id="admin-gate-hint">Admin verrouillé — code requis pour ⚙️ • Éditeur 🧱 débloqué après 3 niveaux ou via admin</p>
+          <div class="multi-row">
+            <input id="admin-code-input" maxlength="20" placeholder="CODE ADMIN" autocomplete="off" />
+            <button id="btn-admin-unlock" class="ghost-btn">🔓 Déverrouiller</button>
+          </div>
+          <p id="admin-unlock-status" class="hint"></p>
+          <p class="hint" style="font-size:11px;color:#999;">Code par défaut : <kbd>CUBEADMIN</kbd> — modifiable dans <code>LevelData.js:ADMIN_CODE</code></p>
+        </div>
+        <div id="admin-gate-unlocked" class="hidden">
+          <p class="hint">✅ Accès admin déverrouillé</p>
+          <button id="btn-admin-lock" class="ghost-btn">🔒 Verrouiller l'admin</button>
+        </div>
+        <p id="editor-lock-hint" class="hint"></p>
+      </div>
+      <p class="hint">3 niveaux • 3 vies partagées • checkpoints verts • drapeau à 2 obligatoire</p>
+    </div>
+  </div>
+
+  <div id="pause" class="overlay hidden">
+    <div class="card">
+      <h2>⏸ Pause</h2>
+      <button id="btn-resume" class="big-btn">▶ Reprendre</button>
+      <button id="btn-restart-pause" class="ghost-btn">↻ Recommencer</button>
+      <button id="btn-quit-pause" class="ghost-btn">🏠 Menu</button>
+    </div>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <div class="card">
+      <h2>💥 Game Over</h2>
+      <p id="gameover-score" class="final-score">Score : 0</p>
+      <button id="btn-retry" class="big-btn">↻ Rejouer</button>
+      <button id="btn-quit-over" class="ghost-btn">🏠 Menu</button>
+    </div>
+  </div>
+
+  <div id="win" class="overlay hidden">
+    <div class="card win-card">
+      <h2>🏆 Victoire !</h2>
+      <p id="win-score" class="final-score">Score : 0</p>
+      <p id="win-time" class="final-time">Temps : 0:00</p>
+      <button id="btn-replay" class="big-btn">↻ Rejouer</button>
+      <button id="btn-quit-win" class="ghost-btn">🏠 Menu</button>
+    </div>
+  </div>
+
+  <!-- Panneau ADMIN -->
+  <div id="admin-panel" class="hidden">
+    <div class="admin-header">
+      <span>⚙️ ADMIN <small>(F2)</small></span>
+      <button id="btn-admin-close" title="Fermer">✕</button>
+    </div>
+    <div id="admin-coins-info" class="admin-info">🪙 0/0</div>
+
+    <div class="admin-section">
+      <h3>❤️ Points de vie</h3>
+      <div class="admin-row">
+        <button id="admin-lives-minus">−</button>
+        <input id="admin-lives" type="number" min="0" max="99" value="3" />
+        <button id="admin-lives-plus">+</button>
+        <button id="admin-heal" class="admin-wide">💚 Soigner</button>
+      </div>
+      <label class="admin-check"><input id="admin-god" type="checkbox" /> 😇 God mode (invincible)</label>
+    </div>
+
+    <div class="admin-section">
+      <h3>🕊️ Vol</h3>
+      <label class="admin-check"><input id="admin-fly" type="checkbox" /> Activer le vol</label>
+      <div class="admin-row">
+        <span class="admin-label">Vitesse</span>
+        <input id="admin-fly-speed" type="range" min="4" max="25" step="1" value="10" />
+        <span id="admin-fly-speed-val">10</span>
+      </div>
+      <div class="admin-row">
+        <button id="admin-fly-up" class="admin-wide">▲ Monter</button>
+        <button id="admin-fly-down" class="admin-wide">▼ Descendre</button>
+      </div>
+      <p class="admin-hint">Clavier en vol : <kbd>Espace</kbd> monter • <kbd>Shift</kbd>/<kbd>C</kbd> descendre</p>
+    </div>
+
+    <div class="admin-section">
+      <h3>🪙 Pièces</h3>
+      <div class="admin-row">
+        <button id="admin-coin-plus1">+1</button>
+        <button id="admin-coin-plus10">+10</button>
+        <button id="admin-coin-all" class="admin-wide">🌟 Toutes</button>
+        <button id="admin-coin-reset" class="admin-wide">↻ Reset</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3>🚩 Niveau</h3>
+      <div class="admin-row">
+        <button id="admin-lvl-1">1</button>
+        <button id="admin-lvl-2">2</button>
+        <button id="admin-lvl-3">3</button>
+        <button id="admin-lvl-prev">◀</button>
+        <button id="admin-lvl-next">▶</button>
+      </div>
+      <div class="admin-row">
+        <button id="admin-tp-spawn" class="admin-wide">📍 Spawn</button>
+        <button id="admin-tp-check" class="admin-wide">🚩 Checkpoint</button>
+        <button id="admin-tp-goal" class="admin-wide">🏁 Drapeau</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3>⚡ Personnage</h3>
+      <div class="admin-row">
+        <span class="admin-label">Vitesse</span>
+        <input id="admin-speed" type="range" min="3" max="20" step="0.5" value="8" />
+        <span id="admin-speed-val">8.0</span>
+      </div>
+      <div class="admin-row">
+        <span class="admin-label">Saut</span>
+        <input id="admin-jump" type="range" min="4" max="18" step="0.5" value="9.2" />
+        <span id="admin-jump-val">9.2</span>
+      </div>
+      <div class="admin-row">
+        <span class="admin-label">Stamina</span>
+        <input id="admin-double-delay" type="range" min="0.5" max="5" step="0.1" value="2.0" />
+        <span id="admin-double-delay-val">2.0s</span>
+      </div>
+      <p class="admin-hint">Délai double-saut (stamina)</p>
+    </div>
+
+    <div class="admin-section">
+      <h3>⭐ Score & divers</h3>
+      <div class="admin-row">
+        <button id="admin-score-plus">+100</button>
+        <button id="admin-score-minus">−100</button>
+        <button id="admin-score-reset">0</button>
+      </div>
+      <div class="admin-row">
+        <button id="admin-respawn" class="admin-wide">📍 Respawn</button>
+        <button id="admin-kill" class="admin-wide">💥 Perdre 1 vie</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Panneau ÉDITEUR -->
+  <div id="editor-panel" class="hidden">
+    <div class="admin-header">
+      <span>🧱 ÉDITEUR <small>(F3)</small></span>
+      <button id="btn-editor-close" title="Fermer">✕</button>
+    </div>
+    <div id="editor-source" class="admin-info">Niveau 1/3</div>
+    <div class="admin-row">
+      <span class="admin-label">Thème</span>
+      <select id="editor-theme"><option value="forest">🌲 Forêt (Monde 1)</option><option value="snow">❄️ Neige (Monde 2)</option></select>
+    </div>
+    <div id="editor-counts" class="editor-counts">🧱 0 • 🪙 0</div>
+
+    <div class="admin-section">
+      <h3>🛠️ Outil</h3>
+      <div class="editor-tools">
+        <button data-tool="select" class="active" title="Sélectionner / déplacer">👆</button>
+        <button data-tool="move" title="Déplacer (Gizmo) — précision">↔️</button>
+        <button data-tool="rotate" title="Pivoter (Gizmo) — rotation">🔄</button>
+        <button data-tool="scale" title="Agrandir (Gizmo) — échelle">⤢</button>
+        <button data-tool="platform" title="Plateforme">🧱</button>
+        <button data-tool="platform-move-x" title="Mobile X">↔️</button>
+        <button data-tool="platform-move-z" title="Mobile Z">↕️</button>
+        <button data-tool="bouncy" title="Rebondissante">🟧</button>
+        <button data-tool="coin" title="Pièce">🪙</button>
+        <button data-tool="spike" title="Pic">🌵</button>
+        <button data-tool="checkpoint" title="Checkpoint">🚩</button>
+        <button data-tool="goal" title="Drapeau">🏁</button>
+        <button data-tool="spawn" title="Spawn">📍</button>
+        <button data-tool="eraser" title="Gomme">🧽</button>
+        <button data-tool="ice" title="Glace glissante">🧊</button>
+        <button data-tool="laser" title="Laser fixe">🔴</button>
+        <button data-tool="laser-spin" title="Laser rotatif">🌀</button>
+        <button data-tool="laser-slide" title="Laser glissant">↔️🔴</button>
+        <button data-tool="wind" title="Zone vent">💨</button>
+      </div>
+      <p id="editor-hint" class="admin-hint">Roblox Studio : clic droit + souris = regarder • WASD + Shift = déplacer caméra • Molette = zoom • Clic = sélectionner / drag = déplacer • Suppr = effacer</p>
+      <div class="admin-row">
+        <span class="admin-label">Grille</span>
+        <input id="editor-snap" type="range" min="0" max="2" step="0.25" value="1" />
+        <span id="editor-snap-val">1</span>
+      </div>
+      <div class="admin-row">
+        <span class="admin-label">Haut. Y</span>
+        <button id="editor-edity-minus">−</button>
+        <span id="editor-edity-val">1.0</span>
+        <button id="editor-edity-plus">+</button>
+        <span class="admin-hint">molette+Shift ou Q/E</span>
+      </div>
+      <div class="admin-row">
+        <button id="editor-undo">↩ Undo</button>
+        <button id="editor-redo">↪ Redo</button>
+        <button id="editor-delete">🗑 Suppr</button>
+        <button id="editor-focus">🎯 Centrer</button>
+      </div>
+    </div>
+
+    <div id="editor-selection" class="admin-section hidden">
+      <h3>🔧 Sélection : <span id="editor-sel-kind">?</span></h3>
+      <div class="admin-row">
+        <span class="admin-label">X</span><input id="ed-px" type="number" step="0.25" />
+        <span class="admin-label">Y</span><input id="ed-py" type="number" step="0.25" />
+        <span class="admin-label">Z</span><input id="ed-pz" type="number" step="0.25" />
+      </div>
+      <div id="editor-size-row" class="admin-row">
+        <span class="admin-label">SX</span><input id="ed-sx" type="number" step="0.25" min="0.5" />
+        <span class="admin-label">SY</span><input id="ed-sy" type="number" step="0.25" min="0.2" />
+        <span class="admin-label">SZ</span><input id="ed-sz" type="number" step="0.25" min="0.5" />
+      </div>
+      <div id="editor-plat-row">
+        <div class="admin-row">
+          <span class="admin-label">Couleur</span><input id="ed-color" type="color" value="#60a5fa" />
+          <span class="admin-label">Type</span>
+          <select id="ed-ptype"><option value="static">fixe</option><option value="bouncy">rebond</option></select>
+        </div>
+        <div class="admin-row">
+          <span class="admin-label">Mouv.</span>
+          <select id="ed-move"><option value="none">fixe</option><option value="x">axe X</option><option value="z">axe Z</option></select>
+          <span class="admin-label">Vit.</span><input id="ed-speed" type="number" step="0.1" min="0.2" max="5" />
+        </div>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <h3>💾 Niveaux customs</h3>
+      <div class="admin-row"><span class="admin-label">Slot 1 <span id="editor-dot-0">○</span></span>
+        <button id="editor-load-0">Ouvrir</button><button id="editor-save-0">Sauver</button><button id="editor-del-0">🗑</button></div>
+      <div class="admin-row"><span class="admin-label">Slot 2 <span id="editor-dot-1">○</span></span>
+        <button id="editor-load-1">Ouvrir</button><button id="editor-save-1">Sauver</button><button id="editor-del-1">🗑</button></div>
+      <div class="admin-row"><span class="admin-label">Slot 3 <span id="editor-dot-2">○</span></span>
+        <button id="editor-load-2">Ouvrir</button><button id="editor-save-2">Sauver</button><button id="editor-del-2">🗑</button></div>
+      <div class="admin-row">
+        <button id="editor-new" class="admin-wide">📄 Nouveau vide</button>
+        <button id="editor-clear" class="admin-wide">🧹 Tout effacer</button>
+      </div>
+      <div class="admin-row">
+        <button id="editor-export" class="admin-wide">⬇ Export JSON</button>
+        <button id="editor-import" class="admin-wide">⬆ Import JSON</button>
+        <input id="editor-import-file" type="file" accept=".json,application/json" class="hidden" />
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <button id="editor-playtest" class="big-btn">▶ TESTER LE NIVEAU</button>
+      <p class="admin-hint">Joue le niveau édité • En test, F3 = retour édition</p>
+    </div>
+  </div>
+
+  <!-- Contrôles tactiles -->
+  <div id="touch-controls" class="hidden">
+    <div id="joystick"><div id="stick"></div></div>
+    <button id="btn-jump">A</button>
+  </div>
+
+  <div id="app-version" title="Version du déploiement">…</div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
